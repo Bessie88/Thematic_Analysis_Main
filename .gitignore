@@ -1,0 +1,23 @@
+# Models and envs
+agents/weights/
+venv/
+vllm_env_home/
+
+# Pipeline outputs and logs
+agents/outputs/
+agents/server.log
+agents/gt_agent_trace.log
+
+# SLURM
+agents/slurm-*.out
+agents/old_slurm.out/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pyc
+
+# Optional: data and IDE
+# data/
+# .cursor/

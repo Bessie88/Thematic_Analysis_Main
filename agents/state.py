@@ -1,0 +1,285 @@
+"""State, routing, and tool dispatch for the GT pipeline."""
+import json
+from typing import Any, Dict, List, Optional, TypedDict
+
+from langgraph.graph import END
+
+from paths import CLUSTERED_CODES_PATH
+from tools import (
+    axial_coding,
+    cluster_refinement,
+    global_graph_construction,
+    graph_construction,
+    hierarchy_construction,
+    high_level_code_generation,
+    open_coding,
+    validate_open_codes,
+    validate_clusters,
+)
+from utils import log_step, remove_think_tags
+
+# Max retries when validator returns FAIL (open coding and axial/cluster validation)
+OPEN_CODING_MAX_RETRIES = 2
+AXIAL_CLUSTERS_MAX_RETRIES = 2
+
+# Name -> callable; tool_node uses this to invoke the right tool from state["tool_call"]
+TOOLS = {
+    "open_coding": open_coding,
+    "validate_open_codes": validate_open_codes,
+    "axial_coding": axial_coding,
+    "validate_clusters": validate_clusters,
+    "cluster_refinement": cluster_refinement,
+    "high_level_code_generation": high_level_code_generation,
+    "hierarchy_construction": hierarchy_construction,
+    "graph_construction": graph_construction,
+    "global_graph_construction": global_graph_construction,
+}
+
+
+class GTState(TypedDict, total=False):
+    """Schema for graph state; all keys optional (total=False). LangGraph merges node outputs into this."""
+    # Inputs
+    research_question: str
+    raw_text: str
+    # Open coding (per-review)
+    open_codes: Optional[str]
+    open_codes_validation: Optional[str]  # "PASS" | "FAIL"
+    open_codes_validation_feedback: Optional[str]
+    _open_coding_retries: int
+    # Axial phase: codes -> clusters -> validation/refinement
+    all_codes_for_axial: Optional[List[str]]
+    axial_mapping: Optional[str]  # cluster summary text, or "done"|"hierarchy"|"graph"|"global_graph"
+    axial_clusters_validation: Optional[str]
+    axial_clusters_validation_feedback: Optional[str]
+    _axial_clusters_retries: int
+    # Downstream outputs
+    codebook: Optional[Dict[str, str]]
+    hierarchy: Optional[str]
+    graph: Optional[str]
+    global_graph: Optional[str]
+    # Control
+    tool_call: Optional[Dict[str, Any]]  # {"tool": name, "args": {...}}; agent sets, tool_node clears
+    step: int
+    _sim_threshold: float
+    _skip_cross_cluster: bool
+
+
+def agent_node(state: GTState):
+    """Agent node: deterministic orchestrator; decides which tool to call (and args) from current state."""
+    step = state.get("step", 0) + 1
+    rq = state.get("research_question", "")
+    retries = state.get("_open_coding_retries", 0)
+
+    # --- Open coding: retry with feedback when validator said FAIL ---
+    if (
+        state.get("open_codes_validation") == "FAIL"
+        and retries < OPEN_CODING_MAX_RETRIES
+        and state.get("raw_text")
+    ):
+        feedback = state.get("open_codes_validation_feedback") or ""
+        return {
+            "tool_call": {
+                "tool": "open_coding",
+                "args": {
+                    "text": state["raw_text"],
+                    "research_question": rq,
+                    "validator_feedback": feedback,
+                },
+            },
+            "step": step,
+            "open_codes_validation": None,
+            "open_codes_validation_feedback": None,
+            "_open_coding_retries": retries + 1,
+        }
+    # --- Open coding: after codes exist, run validator (if not yet run) ---
+    if state.get("open_codes") and state.get("open_codes_validation") is None and not state.get("all_codes_for_axial"):
+        return {
+            "tool_call": {
+                "tool": "validate_open_codes",
+                "args": {
+                    "text": state["raw_text"],
+                    "generated_codes": state["open_codes"],
+                    "research_question": rq,
+                },
+            },
+            "step": step,
+        }
+    # --- Open coding: first call for this review (no feedback) ---
+    if not state.get("open_codes") and state.get("raw_text"):
+        return {"tool_call": {"tool": "open_coding", "args": {"text": state["raw_text"], "research_question": rq}}, "step": step}
+
+    axial_retries = state.get("_axial_clusters_retries", 0)
+    axial_mapping = state.get("axial_mapping")
+    in_axial_phase = axial_mapping and axial_mapping not in ("done", "hierarchy", "graph", "global_graph")
+
+    # --- Axial phase: retry cluster_refinement when validator said FAIL ---
+    if (
+        in_axial_phase
+        and state.get("axial_clusters_validation") == "FAIL"
+        and axial_retries < AXIAL_CLUSTERS_MAX_RETRIES
+        and state.get("all_codes_for_axial")
+    ):
+        feedback = state.get("axial_clusters_validation_feedback") or ""
+        return {
+            "tool_call": {
+                "tool": "cluster_refinement",
+                "args": {
+                    "cluster_file": str(CLUSTERED_CODES_PATH),
+                    "validator_feedback": feedback,
+                    "research_question": rq,
+                },
+            },
+            "step": step,
+            "axial_clusters_validation": None,
+            "axial_clusters_validation_feedback": None,
+            "_axial_clusters_retries": axial_retries + 1,
+        }
+    # --- Axial phase: after axial_coding, run cluster validator (if not yet run) ---
+    if in_axial_phase and state.get("axial_clusters_validation") is None:
+        return {
+            "tool_call": {
+                "tool": "validate_clusters",
+                "args": {
+                    "cluster_file": str(CLUSTERED_CODES_PATH),
+                    "research_question": rq,
+                },
+            },
+            "step": step,
+        }
+    # --- Axial phase: first axial step (embed + cluster) ---
+    if state.get("all_codes_for_axial") and not state.get("axial_mapping"):
+        return {
+            "tool_call": {"tool": "axial_coding", "args": {"open_codes": json.dumps(state["all_codes_for_axial"])}},
+            "step": step,
+        }
+    # --- After axial: high-level labels, then hierarchy, graph, global_graph ---
+    if state.get("axial_mapping") == "done" and not state.get("codebook"):
+        return {
+            "tool_call": {"tool": "high_level_code_generation", "args": {"cluster_file": str(CLUSTERED_CODES_PATH), "research_question": rq}},
+            "step": step,
+        }
+    if state.get("axial_mapping") == "hierarchy" and not state.get("hierarchy"):
+        sim_threshold = state.get("_sim_threshold", 0.6)
+        return {
+            "tool_call": {"tool": "hierarchy_construction", "args": {"research_question": rq, "sim_threshold": sim_threshold}},
+            "step": step,
+        }
+    if state.get("axial_mapping") == "graph" and not state.get("graph"):
+        return {
+            "tool_call": {"tool": "graph_construction", "args": {}},
+            "step": step,
+        }
+    if state.get("axial_mapping") == "global_graph" and not state.get("global_graph"):
+        sim_threshold = state.get("_sim_threshold", 0.7)
+        skip_cross = state.get("_skip_cross_cluster", False)
+        return {
+            "tool_call": {
+                "tool": "global_graph_construction",
+                "args": {
+                    "research_question": rq,
+                    "sim_threshold": sim_threshold,
+                    "skip_cross_cluster": skip_cross,
+                    "cross_cluster_top_k": 75,
+                },
+            },
+            "step": step,
+        }
+    # No tool to run; return step only (router will send to END or agent depending on state)
+    return {"step": step}
+
+
+def _parse_validation_output(output: str) -> tuple:
+    """Parse validator output to (PASS or FAIL, feedback text)."""
+    cleaned = output.strip().upper()
+    if cleaned.startswith("PASS"):
+        return "PASS", output.strip()
+    return "FAIL", output.strip()
+
+
+def router(state: GTState):
+    """Router: returns 'tool' | END | 'agent' so LangGraph knows next node. Called after agent_node."""
+    # Agent set a tool_call -> run the tool
+    if state.get("tool_call"):
+        return "tool"
+    # Open-coding phase: waiting for validation or done
+    if state.get("open_codes") and not state.get("all_codes_for_axial"):
+        validation = state.get("open_codes_validation")
+        retries = state.get("_open_coding_retries", 0)
+        if validation is None:
+            return "agent"  # shouldn't happen; agent would have sent to tool
+        if validation == "PASS":
+            return END
+        if validation == "FAIL" and retries < OPEN_CODING_MAX_RETRIES:
+            return "agent"  # agent will schedule open_coding retry
+        return END
+    # Axial phase (clusters not yet "done"): waiting for cluster validation or done
+    if state.get("axial_mapping") and state.get("axial_mapping") not in ("done", "hierarchy", "graph", "global_graph"):
+        validation = state.get("axial_clusters_validation")
+        axial_retries = state.get("_axial_clusters_retries", 0)
+        if validation is None:
+            return "agent"
+        if validation == "PASS":
+            return END
+        if validation == "FAIL" and axial_retries < AXIAL_CLUSTERS_MAX_RETRIES:
+            return "agent"
+        return END
+    # Downstream: more work to do -> agent; else END
+    if state.get("axial_mapping") == "done" and not state.get("codebook"):
+        return "agent"
+    if state.get("codebook"):
+        return END
+    if state.get("axial_mapping") == "hierarchy" and not state.get("hierarchy"):
+        return "agent"
+    if state.get("hierarchy"):
+        return END
+    if state.get("axial_mapping") == "graph" and not state.get("graph"):
+        return "agent"
+    if state.get("graph"):
+        return END
+    if state.get("axial_mapping") == "global_graph" and not state.get("global_graph"):
+        return "agent"
+    if state.get("global_graph"):
+        return END
+    return "agent"
+
+
+def tool_node(state: GTState):
+    """Tool node: runs the tool from state['tool_call'], maps output to state updates, clears tool_call."""
+    call = state["tool_call"]
+    tool_name = call["tool"]
+
+    raw_output = TOOLS[tool_name].invoke(call["args"])
+    clean_output = remove_think_tags(raw_output)
+
+    log_step(f"TOOL_OUTPUT ({tool_name})", clean_output)
+
+    updates = {"tool_call": None}  # always clear so router doesn't re-dispatch
+
+    if tool_name == "open_coding":
+        updates["open_codes"] = clean_output
+    elif tool_name == "validate_open_codes":
+        verdict, feedback = _parse_validation_output(clean_output)
+        updates["open_codes_validation"] = verdict
+        updates["open_codes_validation_feedback"] = feedback
+    elif tool_name == "axial_coding":
+        updates["axial_mapping"] = clean_output
+    elif tool_name == "validate_clusters":
+        verdict, feedback = _parse_validation_output(clean_output)
+        updates["axial_clusters_validation"] = verdict
+        updates["axial_clusters_validation_feedback"] = feedback
+    elif tool_name == "cluster_refinement":
+        updates["axial_mapping"] = clean_output
+        updates["axial_clusters_validation"] = None  # force re-validation
+        updates["axial_clusters_validation_feedback"] = None
+    elif tool_name == "high_level_code_generation":
+        try:
+            updates["codebook"] = json.loads(clean_output)
+        except json.JSONDecodeError:
+            updates["codebook"] = {}  # fallback if LLM didn't return valid JSON
+    elif tool_name == "hierarchy_construction":
+        updates["hierarchy"] = clean_output
+    elif tool_name == "graph_construction":
+        updates["graph"] = clean_output
+    elif tool_name == "global_graph_construction":
+        updates["global_graph"] = clean_output
+    return updates
