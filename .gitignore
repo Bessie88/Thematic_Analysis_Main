@@ -3,6 +3,10 @@ agents/weights/
 venv/
 vllm_env_home/
 
+# Containers (large, regeneratable)
+agents/*.sif
+*.sif
+
 # Pipeline outputs and logs
 agents/outputs/
 agents/server.log
@@ -19,5 +23,7 @@ __pycache__/
 .pyc
 
 # Optional: data and IDE
-# data/
-# .cursor/
+data/
+.cursor/
+dummy/
+.kaggle/
