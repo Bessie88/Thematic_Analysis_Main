@@ -192,6 +192,7 @@ def router(state: GTState):
             return END
         return "agent"
     # Downstream: more work to do -> agent; else END
+    # axial_mapping == "done" is legacy/compat for --high-level-only (bypasses refine); normal flow uses "refine"
     if state.get("axial_mapping") == "done" and not state.get("codebook"):
         return "agent"
     if state.get("codebook"):

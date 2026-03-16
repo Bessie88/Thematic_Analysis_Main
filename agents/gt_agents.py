@@ -81,6 +81,10 @@ def main() -> None:
             raise SystemExit(1)
         state = _base_state(rq)
         state["axial_mapping"] = "refine"
+        # Pre-load codebook so graph skips high_level_code_generation and goes straight to refine_cluster_assignments
+        with open(CODEBOOK_PATH, encoding="utf-8") as f:
+            existing_cb = json.load(f)
+        state["codebook"] = existing_cb.get("codebook", {})
         final_refine = app.invoke(state, config={"recursion_limit": 25})
         summary = final_refine.get("_cluster_refinement_done", False)
         log_step("REFINE_COMPLETE", "Cluster refinement finished." if summary else "Refine step completed.")

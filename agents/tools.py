@@ -260,7 +260,14 @@ def high_level_code_generation(cluster_file: str = str(CLUSTERED_CODES_PATH), re
             codebook_confidence = {}
 
     for cid, codes in sorted(cluster_to_codes.items(), key=lambda x: int(x[0])):
+        # Resume: skip if both codebook and confidence have this cluster; if codebook has it but confidence doesn't, backfill
         if cid in codebook:
+            if cid not in codebook_confidence:
+                codebook_confidence[cid] = {"label": codebook[cid], "confidence": 1, "rationale": ""}
+                with open(out_path, "w", encoding="utf-8") as f:
+                    json.dump({"codebook": codebook, "cluster_to_codes": cluster_to_codes}, f, indent=2)
+                with open(confidence_path, "w", encoding="utf-8") as f:
+                    json.dump(codebook_confidence, f, indent=2)
             continue
         codes_list = codes if isinstance(codes, list) else []
         if not codes_list:
@@ -383,6 +390,18 @@ Only move codes you are highly confident about. Do not move codes that are borde
                 continue
             moves_applied.append((code, cid, target_cid))
 
+    # Deduplicate: keep first move per code, warn on conflict (e.g. A->B and B->C for same code)
+    seen_codes: Dict[str, tuple] = {}
+    deduped_moves: List[tuple] = []
+    for move in moves_applied:
+        code, from_cid, to_cid = move
+        if code in seen_codes:
+            log_step("REFINE_CONFLICTING_MOVE", f"Code '{code}' has multiple move targets; keeping first.")
+        else:
+            seen_codes[code] = move
+            deduped_moves.append(move)
+    moves_applied = deduped_moves
+
     # Apply moves: build code -> cid, then update
     code_to_cid: Dict[str, str] = {}
     for cid, codes in cluster_to_codes.items():
@@ -418,6 +437,26 @@ Only move codes you are highly confident about. Do not move codes that are borde
     new_codebook = {str(i): codebook.get(cid_list[i], f"Cluster {cid_list[i]}") for i in range(len(cid_list))}
     with open(codebook_path, "w", encoding="utf-8") as f:
         json.dump({"codebook": new_codebook, "cluster_to_codes": new_cluster_to_codes}, f, indent=2)
+    # Rekey codebook_confidence.json so keys match new cluster ids 0..k_new-1
+    confidence_path = os.path.join(os.path.dirname(codebook_path) or ".", "codebook_confidence.json")
+    codebook_confidence_rekeyed: Dict[str, Dict[str, Any]] = {}
+    if os.path.isfile(confidence_path):
+        try:
+            with open(confidence_path, encoding="utf-8") as f:
+                old_confidence = json.load(f)
+            for i in range(len(cid_list)):
+                old_cid = cid_list[i]
+                entry = old_confidence.get(str(old_cid), old_confidence.get(old_cid))
+                if isinstance(entry, dict):
+                    codebook_confidence_rekeyed[str(i)] = {**entry, "label": new_codebook[str(i)]}
+                else:
+                    codebook_confidence_rekeyed[str(i)] = {"label": new_codebook[str(i)], "confidence": 1, "rationale": ""}
+        except (json.JSONDecodeError, TypeError):
+            codebook_confidence_rekeyed = {str(i): {"label": new_codebook[str(i)], "confidence": 1, "rationale": ""} for i in range(len(cid_list))}
+    else:
+        codebook_confidence_rekeyed = {str(i): {"label": new_codebook[str(i)], "confidence": 1, "rationale": ""} for i in range(len(cid_list))}
+    with open(confidence_path, "w", encoding="utf-8") as f:
+        json.dump(codebook_confidence_rekeyed, f, indent=2)
     return f"Refined cluster assignments: {len(moves_applied)} codes moved across clusters."
 
 
