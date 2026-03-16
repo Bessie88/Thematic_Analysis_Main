@@ -169,14 +169,29 @@ def _axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str
     for code, label in zip(all_codes, labels):
         cluster_to_codes[int(label)].append(code)
 
+    # Preserve codes_per_review from gt_codes_only.json so codebook_cleanup can compute datapoint frequency
+    codes_per_review = []
+    codes_only_path = os.path.join(out_dir, "gt_codes_only.json")
+    if os.path.isfile(codes_only_path):
+        try:
+            with open(codes_only_path, encoding="utf-8") as f:
+                codes_only_data = json.load(f)
+            codes_per_review = codes_only_data.get("codes_per_review", [])
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    out = {
+        "all_codes": all_codes,
+        "labels": labels.tolist(),
+        "k": best_k,
+        "cluster_to_codes": {str(i): codes for i, codes in sorted(cluster_to_codes.items())},
+    }
+    if codes_per_review:
+        out["codes_per_review"] = codes_per_review
+
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "gt_clustered_codes.json"), "w", encoding="utf-8") as f:
-        json.dump({
-            "all_codes": all_codes,
-            "labels": labels.tolist(),
-            "k": best_k,
-            "cluster_to_codes": {str(i): codes for i, codes in sorted(cluster_to_codes.items())},
-        }, f, indent=2)
+        json.dump(out, f, indent=2)
 
     lines = [f"Axial coding (embed + K-means): K={best_k} clusters.", ""]
     for cid, codes in sorted(cluster_to_codes.items()):
@@ -211,159 +226,11 @@ def axial_coding(open_codes: str) -> str:
 
 
 @tool
-def validate_clusters(cluster_file: str, research_question: str) -> str:
-    """
-    Review clusters after axial coding. For each cluster, check whether codes belong to the same concept.
-    Return PASS (optional: suggest label per cluster) or FAIL with issues so refinement can fix.
-    """
-    if not os.path.isfile(cluster_file):
-        return "FAIL\nIssues:\n- Cluster file not found."
-    with open(cluster_file, encoding="utf-8") as f:
-        data = json.load(f)
-    cluster_to_codes = data.get("cluster_to_codes", {})
-    if not cluster_to_codes:
-        return "FAIL\nIssues:\n- No cluster_to_codes in file."
-    clusters_text = ""
-    for cid in sorted(cluster_to_codes.keys(), key=lambda x: int(x)):
-        codes = cluster_to_codes.get(cid, [])
-        clusters_text += f"\nCluster {cid}:\n" + "\n".join(f"  - {c}" for c in codes) + "\n"
-    prompt = f"""You are reviewing qualitative code clusters for a research question.
-
-Research Question: {research_question}
-
-The following clusters were produced by embedding + K-means. For each cluster, check:
-1. Do these codes belong in the same concept cluster (coherent theme)?
-2. If any code does not fit (e.g. belongs to a different theme like performance vs interface), note it.
-
-Clusters:
-{clusters_text}
-
-Respond with exactly one of:
-- PASS
-(optional: add a suggested short label per cluster, e.g. "Cluster 0: Interface usability issues")
-or
-- FAIL
-Issues:
-- Cluster <id>: <what is wrong, e.g. "Menu lag belongs to performance issues">
-- ...
-
-If PASS, you may add suggested labels after PASS. If FAIL, list specific issues so codes can be reassigned."""
-    return llm.invoke(prompt).content
-
-
-@tool
-def cluster_refinement(cluster_file: str, validator_feedback: str, research_question: str) -> str:
-    """
-    Reassign codes between clusters using validator feedback (no re-embedding).
-    Reads gt_clustered_codes.json, asks LLM for concrete moves, applies them, writes back, returns axial-style summary.
-    """
-    if not os.path.isfile(cluster_file):
-        return "Error: cluster file not found."
-    with open(cluster_file, encoding="utf-8") as f:
-        data = json.load(f)
-    cluster_to_codes = data.get("cluster_to_codes", {})
-    all_codes = data.get("all_codes", [])
-    codes_per_review = data.get("codes_per_review", [])
-    k_prev = data.get("k", len(cluster_to_codes))
-    if not cluster_to_codes:
-        return "Error: no cluster_to_codes."
-
-    # Build current cluster text for LLM
-    clusters_text = ""
-    for cid in sorted(cluster_to_codes.keys(), key=lambda x: int(x)):
-        codes = cluster_to_codes.get(cid, [])
-        clusters_text += f"\nCluster {cid}:\n" + "\n".join(f"  - {c}" for c in codes) + "\n"
-
-    prompt = f"""You are refining code clusters based on reviewer feedback.
-
-Research Question: {research_question}
-
-Reviewer feedback:
-{validator_feedback}
-
-Current clusters:
-{clusters_text}
-
-Output a list of reassignments, one per line, in this exact format:
-MOVE: "code" | from_cluster_id | to_cluster_id
-
-Example:
-MOVE: "Menu lag" | 2 | 5
-
-Only output lines that start with MOVE:. Use the exact code string as in the clusters. Cluster IDs are integers. To create a new cluster, use a new id (e.g. the current max + 1). Do not duplicate codes across clusters."""
-    try:
-        raw = llm.invoke(prompt).content
-    except Exception as e:
-        log_step("CLUSTER_REFINEMENT_LLM_ERROR", str(e))
-        return _axial_summary_from_cluster_to_codes(cluster_to_codes, prefix="Axial coding (refinement failed):")
-
-    raw = remove_think_tags(raw)
-    # Parse MOVE lines
-    moves = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if not line.upper().startswith("MOVE:"):
-            continue
-        match = re.match(r'MOVE:\s*"([^"]+)"\s*\|\s*(\d+)\s*\|\s*(\d+)', line, re.IGNORECASE)
-        if not match:
-            match = re.match(r"MOVE:\s*'([^']+)'\s*\|\s*(\d+)\s*\|\s*(\d+)", line, re.IGNORECASE)
-        if match:
-            code, from_c, to_c = match.group(1), int(match.group(2)), int(match.group(3))
-            moves.append((code, str(from_c), str(to_c)))
-
-    # Apply moves: build code -> new cluster id (start from current assignment)
-    code_to_cluster: Dict[str, str] = {}
-    for cid, codes in cluster_to_codes.items():
-        for c in codes:
-            code_to_cluster[c] = cid
-    for code, from_c, to_c in moves:
-        if code not in code_to_cluster:
-            continue
-        if code_to_cluster[code] != from_c:
-            continue
-        code_to_cluster[code] = to_c
-
-    # Rebuild cluster_to_codes from code_to_cluster
-    new_cluster_to_codes: Dict[str, List[str]] = defaultdict(list)
-    for code, cid in code_to_cluster.items():
-        new_cluster_to_codes[cid].append(code)
-    # Sort cluster ids numerically
-    new_cluster_to_codes = {str(cid): codes for cid, codes in sorted(new_cluster_to_codes.items(), key=lambda x: int(x[0]))}
-    k_new = len(new_cluster_to_codes)
-    cid_list = sorted(new_cluster_to_codes.keys(), key=int)
-    code_to_idx = {c: cid_list.index(code_to_cluster[c]) for c in code_to_cluster}
-    labels = [code_to_idx.get(c, 0) for c in all_codes]
-
-    out = {
-        "all_codes": all_codes,
-        "labels": labels,
-        "k": k_new,
-        "codes_per_review": codes_per_review,
-        "cluster_to_codes": new_cluster_to_codes,
-    }
-    os.makedirs(os.path.dirname(cluster_file) or ".", exist_ok=True)
-    with open(cluster_file, "w", encoding="utf-8") as f:
-        json.dump(out, f, indent=2)
-    return _axial_summary_from_cluster_to_codes(new_cluster_to_codes, prefix="Axial coding (refined):")
-
-
-def _axial_summary_from_cluster_to_codes(cluster_to_codes: Dict[str, List[str]], prefix: str = "Axial coding:") -> str:
-    """Produce the same text summary format as _axial_embed_and_cluster for axial_mapping."""
-    lines = [f"{prefix} K={len(cluster_to_codes)} clusters.", ""]
-    for cid, codes in sorted(cluster_to_codes.items(), key=lambda x: int(x[0])):
-        lines.append(f"Cluster {cid}:")
-        for c in codes:
-            lines.append(f"  - {c}")
-        lines.append("")
-    return "\n".join(lines).strip()
-
-
-@tool
 def high_level_code_generation(cluster_file: str = str(CLUSTERED_CODES_PATH), research_question: str = "") -> str:
     """
     Step 2b: High-level code generation (final part of axial).
-    Reads cluster_to_codes from disk, prompts LLM once per cluster for one short label
-    describing the gist, writes codebook.json (after each cluster for resume), returns codebook as JSON string.
+    Reads cluster_to_codes from disk, prompts LLM once per cluster for a label, confidence (1-5), and rationale.
+    Writes codebook.json (labels only, for downstream) and codebook_confidence.json (full objects). Returns codebook as JSON string.
     """
     if not os.path.isfile(cluster_file):
         return json.dumps({"error": f"Missing {cluster_file}; run axial step first."})
@@ -372,9 +239,12 @@ def high_level_code_generation(cluster_file: str = str(CLUSTERED_CODES_PATH), re
     cluster_to_codes = data.get("cluster_to_codes", {})
     if not cluster_to_codes:
         return json.dumps({"error": "No cluster_to_codes in file."})
-    out_path = os.path.join(os.path.dirname(cluster_file) or ".", "codebook.json")
+    out_dir = os.path.dirname(cluster_file) or "."
+    out_path = os.path.join(out_dir, "codebook.json")
+    confidence_path = os.path.join(out_dir, "codebook_confidence.json")
     # Resume: load existing codebook if present so we can skip already-done clusters (e.g. after SGLang died)
     codebook = {}
+    codebook_confidence: Dict[str, Dict[str, Any]] = {}
     if os.path.isfile(out_path):
         try:
             with open(out_path, encoding="utf-8") as f:
@@ -382,37 +252,173 @@ def high_level_code_generation(cluster_file: str = str(CLUSTERED_CODES_PATH), re
             codebook = existing.get("codebook", {})
         except (json.JSONDecodeError, KeyError):
             pass
+    if os.path.isfile(confidence_path):
+        try:
+            with open(confidence_path, encoding="utf-8") as f:
+                codebook_confidence = json.load(f)
+        except (json.JSONDecodeError, TypeError):
+            codebook_confidence = {}
+
     for cid, codes in sorted(cluster_to_codes.items(), key=lambda x: int(x[0])):
         if cid in codebook:
             continue
         codes_list = codes if isinstance(codes, list) else []
         if not codes_list:
             codebook[cid] = f"Cluster {cid}"
+            codebook_confidence[cid] = {"label": codebook[cid], "confidence": 1, "rationale": ""}
         else:
             bulleted = "\n".join(f"- {c}" for c in codes_list[:30])
             if len(codes_list) > 30:
                 bulleted += f"\n- ... and {len(codes_list) - 30} more"
-            rq_line = f"\nResearch Question: {research_question}\nGenerate the label with the research question in mind.\n" if research_question else ""
+            rq_line = f"\nResearch Question: {research_question}\nGenerate with the research question in mind.\n" if research_question else ""
             prompt = f"""The following open codes belong to one cluster:
 
 {bulleted}
 {rq_line}
-Generate one short high-level label (2-6 words) that describes the gist of this cluster. Output only the label, no explanation."""
+Output a single JSON object with:
+- "label": one short high-level label (2-6 words) for this cluster
+- "confidence": integer 1-5 (5 = very coherent, 1 = low coherence)
+- "rationale": one sentence explaining why the cluster coheres or doesn't
+
+Output ONLY valid JSON, no other text. Example: {{"label": "Interface usability issues", "confidence": 4, "rationale": "Codes all relate to UI and usability."}}"""
 
             try:
                 raw = llm.invoke(prompt).content
+                parsed = clean_and_parse_json(remove_think_tags(raw))
+                label = (parsed.get("label") or "").strip().strip('"\'')
+                if not label or len(label) > 80:
+                    label = f"Cluster {cid}"
+                confidence = parsed.get("confidence", 1)
+                if not isinstance(confidence, int):
+                    try:
+                        confidence = int(float(confidence))
+                    except (TypeError, ValueError):
+                        confidence = 1
+                confidence = max(1, min(5, confidence))
+                rationale = (parsed.get("rationale") or "").strip()
+                codebook[cid] = label
+                codebook_confidence[cid] = {"label": label, "confidence": confidence, "rationale": rationale}
+                if confidence <= 2:
+                    log_step("LOW_CONFIDENCE_CLUSTER", f"Cluster {cid}: confidence={confidence}, label={label}")
             except Exception as e:
                 log_step("HIGH_LEVEL_LLM_ERROR", f"Cluster {cid}: {e}")
                 codebook[cid] = f"Cluster {cid}"
-            else:
-                label = remove_think_tags(raw).strip().split("\n")[0].strip().strip('"\'')
-                if not label or len(label) > 80:
-                    label = f"Cluster {cid}"
-                codebook[cid] = label
+                codebook_confidence[cid] = {"label": codebook[cid], "confidence": 1, "rationale": ""}
         # Save after each cluster so we can resume if SGLang dies mid-run
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump({"codebook": codebook, "cluster_to_codes": cluster_to_codes}, f, indent=2)
+        with open(confidence_path, "w", encoding="utf-8") as f:
+            json.dump(codebook_confidence, f, indent=2)
     return json.dumps(codebook)
+
+
+@tool
+def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
+    """
+    After high-level labels exist, review each cluster and move codes that clearly belong in another cluster.
+    Reads codebook.json and gt_clustered_codes.json, asks LLM per cluster for MOVE commands (code -> target label),
+    applies moves, removes empty clusters, writes back gt_clustered_codes.json. Returns summary of moves applied.
+    """
+    if not os.path.isfile(codebook_path):
+        return f"Error: codebook not found at {codebook_path}"
+    if not os.path.isfile(cluster_file):
+        return f"Error: cluster file not found at {cluster_file}"
+    with open(codebook_path, encoding="utf-8") as f:
+        cb_data = json.load(f)
+    codebook = cb_data.get("codebook", {})
+    with open(cluster_file, encoding="utf-8") as f:
+        data = json.load(f)
+    cluster_to_codes = data.get("cluster_to_codes", {})
+    all_codes = data.get("all_codes", [])
+    codes_per_review = data.get("codes_per_review", [])
+
+    # label -> list of cids (for ambiguous label check)
+    label_to_cids: Dict[str, List[str]] = defaultdict(list)
+    for cid, label in codebook.items():
+        label_to_cids[label].append(cid)
+
+    moves_applied: List[tuple] = []  # (code, from_cid, to_cid)
+
+    for cid in sorted(cluster_to_codes.keys(), key=lambda x: int(x)):
+        codes = cluster_to_codes.get(cid, [])
+        if not codes:
+            continue
+        label = codebook.get(cid, f"Cluster {cid}")
+        other_labels = [codebook.get(oid, f"Cluster {oid}") for oid in sorted(cluster_to_codes.keys(), key=lambda x: int(x)) if oid != cid]
+        bulleted = "\n".join(f"- {c}" for c in codes)
+        other_str = ", ".join(other_labels) if other_labels else "(none)"
+
+        prompt = f"""This cluster is labeled "{label}". Here are its codes:
+{bulleted}
+
+Other available cluster labels are: {other_str}
+
+Identify any codes that clearly do not belong in "{label}" and would fit better in one of the other clusters. For each outlier, output exactly:
+MOVE: "{{code}}" → "{{target cluster label}}"
+If all codes belong, output: NONE
+Only move codes you are highly confident about. Do not move codes that are borderline."""
+
+        try:
+            raw = remove_think_tags(llm.invoke(prompt).content)
+        except Exception as e:
+            log_step("REFINE_LLM_ERROR", f"Cluster {cid}: {e}")
+            continue
+        for line in raw.splitlines():
+            line = line.strip()
+            if line.upper() == "NONE" or not line:
+                continue
+            # Match MOVE: "code" → "target label" or MOVE: 'code' → 'target label'
+            match = re.search(r'MOVE:\s*["\']([^"\']+)["\']\s*[→>]\s*["\']([^"\']+)["\']', line, re.IGNORECASE)
+            if not match:
+                continue
+            code, target_label = match.group(1).strip(), match.group(2).strip()
+            target_cids = label_to_cids.get(target_label, [])
+            if not target_cids:
+                continue
+            if len(target_cids) > 1:
+                log_step("REFINE_SKIP_AMBIGUOUS_LABEL", f"MOVE skipped: label '{target_label}' maps to multiple clusters")
+                continue
+            target_cid = target_cids[0]
+            if target_cid == cid:
+                continue
+            moves_applied.append((code, cid, target_cid))
+
+    # Apply moves: build code -> cid, then update
+    code_to_cid: Dict[str, str] = {}
+    for cid, codes in cluster_to_codes.items():
+        for c in codes:
+            code_to_cid[c] = cid
+    for code, _from, to_cid in moves_applied:
+        if code in code_to_cid:
+            code_to_cid[code] = to_cid
+
+    # Rebuild cluster_to_codes from code_to_cid
+    new_cluster_to_codes: Dict[str, List[str]] = defaultdict(list)
+    for code, cid in code_to_cid.items():
+        new_cluster_to_codes[cid].append(code)
+    # Remove empty clusters and rekey to contiguous 0..k_new-1
+    non_empty = {cid: codes for cid, codes in new_cluster_to_codes.items() if codes}
+    cid_list = sorted(non_empty.keys(), key=int)
+    new_cluster_to_codes = {str(i): non_empty[cid_list[i]] for i in range(len(cid_list))}
+    k_new = len(new_cluster_to_codes)
+    code_to_idx = {c: i for i, cids in enumerate(new_cluster_to_codes.values()) for c in cids}
+    labels = [code_to_idx.get(c, 0) for c in all_codes]
+
+    out = {
+        "all_codes": all_codes,
+        "labels": labels,
+        "k": k_new,
+        "cluster_to_codes": new_cluster_to_codes,
+        "codes_per_review": codes_per_review,
+    }
+    os.makedirs(os.path.dirname(cluster_file) or ".", exist_ok=True)
+    with open(cluster_file, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=2)
+    # Keep codebook.json in sync: rekey codebook to new cluster ids 0..k_new-1
+    new_codebook = {str(i): codebook.get(cid_list[i], f"Cluster {cid_list[i]}") for i in range(len(cid_list))}
+    with open(codebook_path, "w", encoding="utf-8") as f:
+        json.dump({"codebook": new_codebook, "cluster_to_codes": new_cluster_to_codes}, f, indent=2)
+    return f"Refined cluster assignments: {len(moves_applied)} codes moved across clusters."
 
 
 def _build_hierarchy(edges: List[Dict[str, Any]], cluster_to_codes: Dict[str, List[str]], codebook: Dict[str, str]) -> Dict[str, Any]:

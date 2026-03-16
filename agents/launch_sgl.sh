@@ -141,7 +141,17 @@ if [ $HL_EXIT -ne 0 ]; then
     exit $HL_EXIT
 fi
 
-# --- 9. Hierarchy construction (relationship classification + edges), SGLang still up ---
+# --- 9. Refine cluster assignments (same SGLang session, before hierarchy) ---
+echo "Starting refine cluster assignments (gt_agents.py --refine-only)..."
+python gt_agents.py --refine-only --research-question "$RESEARCH_QUESTION"
+REFINE_EXIT=$?
+echo "Refine step finished with exit code $REFINE_EXIT."
+if [ $REFINE_EXIT -ne 0 ]; then
+    kill $SERVER_PID
+    exit $REFINE_EXIT
+fi
+
+# --- 10. Hierarchy construction (relationship classification + edges), SGLang still up ---
 echo "Starting hierarchy construction (gt_agents.py --hierarchy-only)..."
 python gt_agents.py --hierarchy-only --research-question "$RESEARCH_QUESTION"
 HIER_EXIT=$?
@@ -151,7 +161,7 @@ if [ $HIER_EXIT -ne 0 ]; then
     exit $HIER_EXIT
 fi
 
-# --- 10. Graph construction (transitivity inference), no LLM needed ---
+# --- 11. Graph construction (transitivity inference), no LLM needed ---
 echo "Starting graph construction (gt_agents.py --graph-only)..."
 python gt_agents.py --graph-only --research-question "$RESEARCH_QUESTION"
 GRAPH_EXIT=$?
@@ -160,7 +170,7 @@ if [ $GRAPH_EXIT -ne 0 ]; then
     exit $GRAPH_EXIT
 fi
 
-# --- 11. Global graph construction (merge clusters, optional cross-cluster linking), SGLang still up ---
+# --- 12. Global graph construction (merge clusters, optional cross-cluster linking), SGLang still up ---
 echo "Starting global graph construction (gt_agents.py --global-graph-only)..."
 python gt_agents.py --global-graph-only --research-question "$RESEARCH_QUESTION"
 GLOBAL_EXIT=$?

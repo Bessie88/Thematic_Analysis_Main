@@ -30,9 +30,7 @@ def _base_state(research_question: str) -> dict:
         "_open_coding_retries": 0,
         "all_codes_for_axial": None,
         "axial_mapping": None,
-        "axial_clusters_validation": None,
-        "axial_clusters_validation_feedback": None,
-        "_axial_clusters_retries": 0,
+        "_cluster_refinement_done": False,
         "codebook": None,
         "hierarchy": None,
         "graph": None,
@@ -48,6 +46,7 @@ def main() -> None:
     p.add_argument("--open-coding-only", action="store_true", help="Run only open coding; save gt_codes_only.json and exit (so SGLang can be killed before axial).")
     p.add_argument("--axial-only", action="store_true", help="Load gt_codes_only.json and run only the axial step in the graph.")
     p.add_argument("--high-level-only", action="store_true", help="Load gt_clustered_codes.json and run high-level code generation (LLM must be up).")
+    p.add_argument("--refine-only", action="store_true", help="Run high-level (if needed) then refine_cluster_assignments. Requires codebook.json and gt_clustered_codes.json. LLM must be up.")
     p.add_argument("--hierarchy-only", action="store_true", help="Run hierarchy construction (relationship classification + edges). LLM must be up.")
     p.add_argument("--graph-only", action="store_true", help="Run graph construction (transitivity inference). No LLM needed.")
     p.add_argument("--global-graph-only", action="store_true", help="Run global graph construction (merge clusters, optional cross-cluster linking). LLM needed unless --skip-cross-cluster.")
@@ -71,6 +70,20 @@ def main() -> None:
         final_hl = app.invoke(state, config={"recursion_limit": 25})
         codebook = final_hl.get("codebook") or {}
         log_step("CODEBOOK_COMPLETE", f"Generated {len(codebook)} high-level labels. See {display_path(CODEBOOK_PATH)}")
+        raise SystemExit(0)
+
+    if args.refine_only:
+        if not CODEBOOK_PATH.is_file():
+            print(f"Error: {display_path(CODEBOOK_PATH)} not found. Run high-level step first.")
+            raise SystemExit(1)
+        if not CLUSTERED_CODES_PATH.is_file():
+            print(f"Error: {display_path(CLUSTERED_CODES_PATH)} not found. Run axial step first.")
+            raise SystemExit(1)
+        state = _base_state(rq)
+        state["axial_mapping"] = "refine"
+        final_refine = app.invoke(state, config={"recursion_limit": 25})
+        summary = final_refine.get("_cluster_refinement_done", False)
+        log_step("REFINE_COMPLETE", "Cluster refinement finished." if summary else "Refine step completed.")
         raise SystemExit(0)
 
     if args.graph_only:
@@ -146,12 +159,19 @@ def main() -> None:
         log_step("OPEN_CODING_ONLY", "Exiting so SGLang can be killed before axial.")
         raise SystemExit(0)
 
-    # Single invoke: axial → validate_clusters (maybe cluster_refinement) → high_level → hierarchy → graph → global_graph
+    # First invoke: axial (embed + K-means) -> END
     state = _base_state(rq)
     state["all_codes_for_axial"] = all_codes
     final_axial = app.invoke(state, config={"recursion_limit": 25})
     axial_mapping = final_axial.get("axial_mapping", "")
     log_step("AXIAL_COMPLETE", axial_mapping[:500] + "..." if len(axial_mapping) > 500 else axial_mapping)
+
+    # Second invoke: high-level labels then refine_cluster_assignments (axial_mapping = "refine")
+    state = _base_state(rq)
+    state["axial_mapping"] = "refine"
+    final_refine = app.invoke(state, config={"recursion_limit": 25})
+    codebook = final_refine.get("codebook") or {}
+    log_step("CODEBOOK_REFINE_COMPLETE", f"High-level and refinement done. {len(codebook)} clusters. See {display_path(CODEBOOK_PATH)}")
 
 
 if __name__ == "__main__":
