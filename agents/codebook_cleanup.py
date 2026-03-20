@@ -13,10 +13,9 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 
-from paths import (
+from agents.core.paths import (
     CLEANED_GLOBAL_GRAPH_PATH,
     CLUSTERED_CODES_PATH,
-    DATA_DIR,
     GLOBAL_GRAPH_PATH,
     GT_CODES_ONLY_PATH,
 )
@@ -64,20 +63,32 @@ def equivalence_components(merge_groups: List[List[str]]) -> List[List[str]]:
     """
     Compute full connected components under equivalence closure.
     Build undirected graph from merge_groups (each list connects all pairs), then union-find.
+    Uses an iterative find to avoid Python recursion limits on large graphs.
     """
     parent: Dict[str, str] = {}
 
     def find(x: str) -> str:
+        # Iterative find with path compression.
+        root = x
+        # First walk up to the root.
+        while root in parent and parent[root] != root:
+            root = parent[root]
+        # If x was unseen, initialize it as its own parent.
+        if root not in parent:
+            parent[root] = root
+        # Path compression on the way back down.
+        while x in parent and parent[x] != root:
+            parent_x = parent[x]
+            parent[x] = root
+            x = parent_x
         if x not in parent:
-            parent[x] = x
-        if parent[x] != x:
-            parent[x] = find(parent[x])
-        return parent[x]
+            parent[x] = root
+        return root
 
     def union(a: str, b: str) -> None:
         ra, rb = find(a), find(b)
         if ra != rb:
-            parent[ra] = rb
+            parent[rb] = ra
 
     for group in merge_groups:
         for i, a in enumerate(group):
@@ -85,7 +96,7 @@ def equivalence_components(merge_groups: List[List[str]]) -> List[List[str]]:
                 union(a, b)
 
     components_map: Dict[str, List[str]] = defaultdict(list)
-    for x in parent:
+    for x in list(parent.keys()):
         root = find(x)
         components_map[root].append(x)
     return list(components_map.values())
@@ -163,6 +174,11 @@ def run_cleanup(
         direct_parents[e["child"]].append(e["parent"])
 
     orphan_set: Set[str] = set()
+
+    def _parent_sort_key(p: str) -> Tuple[int, int, str]:
+        # Higher datapoint frequency first, then higher in-degree, then lexicographic
+        return (-datapoint_freq.get(p, 0), -in_deg.get(p, 0), p)
+
     for n in list(current_nodes):
         if datapoint_freq.get(n, 0) >= min_freq:
             continue
@@ -171,9 +187,7 @@ def run_cleanup(
             orphan_set.add(n)
             continue
         # Choose parent: highest frequency, then in-degree, then lexicographic
-        def key(p: str) -> Tuple[int, int, str]:
-            return (-datapoint_freq.get(p, 0), -in_deg.get(p, 0), p)
-        chosen = min(parents, key=key)
+        chosen = min(parents, key=_parent_sort_key)
         for x in nodes:
             if rep[x] == n:
                 rep[x] = chosen
@@ -203,6 +217,7 @@ def run_cleanup(
         "canonical_nodes": canonical_nodes,
         "edges": direct_edges,
         "inferred_edges": inferred_edges,
+        "node_frequencies": {n: datapoint_freq.get(n, 0) for n in canonical_nodes},
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
