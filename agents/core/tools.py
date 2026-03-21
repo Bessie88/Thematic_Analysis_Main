@@ -2,11 +2,15 @@
 import json
 import os
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict, deque
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
+from sentence_transformers import SentenceTransformer
+from sklearn.cluster import KMeans, MiniBatchKMeans
+from sklearn.metrics import silhouette_score
 
 from .prompts import (
     open_coding_prompt,
@@ -29,6 +33,9 @@ from .paths import (
     ensure_output_dirs,
 )
 from .utils import clean_and_parse_json, log_step, remove_think_tags
+
+# Refine step: only offer the K most similar cluster labels as MOVE targets (embedding cosine).
+REFINE_TOP_K_OTHER_CLUSTERS = 5
 
 # 2. LLM Setup (vLLM)
 # ==================================================
@@ -77,23 +84,12 @@ def _axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str
     Embeds all codes, clusters them, returns a text summary of cluster -> codes.
     Uses same logic as embed_and_cluster.py (LOGOS-style).
     """
-    try:
-        import numpy as np
-        from collections import defaultdict
-        from sklearn.cluster import KMeans, MiniBatchKMeans
-        from sklearn.metrics import silhouette_score
-    except ModuleNotFoundError as e:
-        raise ModuleNotFoundError(
-            f"Axial step needs scikit-learn and sentence_transformers. Install with: pip install scikit-learn sentence-transformers. Original: {e}"
-        ) from e
-
     MINIBATCH_SIZE = 1000
     K_MIN, K_MAX_DIVISOR = 2, 3
 
     if not all_codes:
         return "No codes to cluster."
 
-    from sentence_transformers import SentenceTransformer
     model = SentenceTransformer(model_name)
     embeddings = model.encode(all_codes, batch_size=64, show_progress_bar=True, normalize_embeddings=True)
     embeddings = np.asarray(embeddings, dtype=np.float32)
@@ -290,14 +286,51 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
 
     moves_applied: List[tuple] = []  # (code, from_cid, to_cid)
 
-    for cid in sorted(cluster_to_codes.keys(), key=lambda x: int(x)):
+    sorted_oids = sorted(cluster_to_codes.keys(), key=lambda x: int(x))
+    if not sorted_oids:
+        return "Error: no clusters in cluster file"
+
+    label_for_oid = {oid: codebook.get(oid, f"Cluster {oid}") for oid in sorted_oids}
+    label_texts = [label_for_oid[oid] for oid in sorted_oids]
+
+    model_name = os.environ.get("GT_EMBED_MODEL") or (
+        str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B")
+        if os.path.isdir(str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B"))
+        else "Qwen/Qwen3-Embedding-0.6B"
+    )
+    if os.path.isdir(model_name):
+        model_name = os.path.abspath(model_name)
+    try:
+        embed_model = SentenceTransformer(model_name, device="cpu")
+    except Exception as e:
+        return f"Error loading embedding model for refine: {e}"
+
+    emb = embed_model.encode(label_texts, normalize_embeddings=True, show_progress_bar=False)
+    emb = np.asarray(emb, dtype=np.float32)
+    oid_to_pos = {oid: i for i, oid in enumerate(sorted_oids)}
+
+    for cid in sorted_oids:
         codes = cluster_to_codes.get(cid, [])
         if not codes:
             continue
         label = codebook.get(cid, f"Cluster {cid}")
-        other_labels = [codebook.get(oid, f"Cluster {oid}") for oid in sorted(cluster_to_codes.keys(), key=lambda x: int(x)) if oid != cid]
+        pos = oid_to_pos[cid]
+        sims = emb @ emb[pos]
+        sims = sims.copy()
+        sims[pos] = -np.inf
+
+        n_others = len(sorted_oids) - 1
+        k_take = min(REFINE_TOP_K_OTHER_CLUSTERS, n_others)
+        if k_take <= 0:
+            other_str = "(none)"
+        else:
+            # Top-k by cosine similarity (descending)
+            part = np.argpartition(-sims, k_take - 1)[:k_take]
+            top_positions = part[np.argsort(-sims[part])]
+            other_labels = [label_texts[j] for j in top_positions]
+            other_str = ", ".join(other_labels)
+
         bulleted = "\n".join(f"- {c}" for c in codes)
-        other_str = ", ".join(other_labels) if other_labels else "(none)"
 
         prompt = refine_cluster_assignments_prompt(label, bulleted, other_str)
 
@@ -398,8 +431,6 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
 
 def _build_hierarchy(edges: List[Dict[str, Any]], cluster_to_codes: Dict[str, List[str]], codebook: Dict[str, str]) -> Dict[str, Any]:
     """Build per-cluster hierarchy from classified edges: apply merges (union-find), then directed edges."""
-    from collections import defaultdict
-
     parent_map: Dict[str, str] = {}
 
     def find(x: str) -> str:
@@ -465,8 +496,6 @@ def _infer_graph_per_cluster(
     Deduction-first conflict: do not add A→C if C→A exists or A,C in same equiv class.
     Returns (final_edges_list, inferred_edges_list).
     """
-    from collections import defaultdict, deque
-
     equiv_rep: Dict[str, str] = {}
     for group in merge_groups:
         rep = group[0]
@@ -523,7 +552,7 @@ def _infer_graph_global(
 @tool
 def global_graph_construction(
     research_question: str = "",
-    sim_threshold: float = 0.7,
+    sim_threshold: float = 0.75,
     skip_cross_cluster: bool = False,
     cross_cluster_top_k: int = 75,
 ) -> str:
@@ -532,8 +561,6 @@ def global_graph_construction(
     Merge all per-cluster nodes and edges, optionally add cross-cluster links via LLM,
     apply global transitivity and equivalence closure, write gt_global_graph.json.
     """
-    from collections import defaultdict
-
     graph_path = str(GRAPH_PATH)
     codebook_path = str(CODEBOOK_PATH)
     if not os.path.isfile(graph_path):
@@ -601,19 +628,15 @@ def global_graph_construction(
     cross_cluster_edges: List[Dict[str, Any]] = []
     existing_cross_count = 0
     if not skip_cross_cluster:
-        import numpy as np
-
         model_name = os.environ.get("GT_EMBED_MODEL") or (
             str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B") if os.path.isdir(str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B")) else "Qwen/Qwen3-Embedding-0.6B"
         )
         if os.path.isdir(model_name):
             model_name = os.path.abspath(model_name)
 
-        from sentence_transformers import SentenceTransformer
         embed_model = SentenceTransformer(model_name, device="cpu")
 
         # Embed cluster reps + top-3 codes per cluster; track cluster_id for cross-cluster filter
-        from collections import Counter
         labeled: List[tuple] = []  # (label, cluster_id)
         for cid in sorted(codebook.keys(), key=int):
             rep = codebook.get(cid, f"Cluster {cid}")
@@ -752,15 +775,13 @@ def global_graph_construction(
 
 
 @tool
-def hierarchy_construction(research_question: str = "", sim_threshold: float = 0.6) -> str:
+def hierarchy_construction(research_question: str = "", sim_threshold: float = 0.75) -> str:
     """
     Step 4 (LOGOS): Relationship classification + hierarchy edges.
     For each cluster: embed codes + representative on CPU, filter pairs by cosine
     similarity, classify kept pairs via LLM, save edges to JSONL and build
     per-cluster hierarchy in gt_hierarchy.json.
     """
-    import numpy as np
-
     codebook_path = str(CODEBOOK_PATH)
     if not os.path.isfile(codebook_path):
         return json.dumps({"error": "Missing codebook.json; run high-level step first."})
@@ -777,7 +798,6 @@ def hierarchy_construction(research_question: str = "", sim_threshold: float = 0
     if os.path.isdir(model_name):
         model_name = os.path.abspath(model_name)
 
-    from sentence_transformers import SentenceTransformer
     embed_model = SentenceTransformer(model_name, device="cpu")
 
     edges_path = str(HIERARCHY_EDGES_PATH)
