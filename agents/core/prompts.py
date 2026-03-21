@@ -26,8 +26,10 @@ Rules:
 - Produce 1 to 5 codes total (depending on content).
 - Each code must be a short noun phrase (2–6 words).
 - Codes must be distinct (no near-duplicates).
-- Abstract the idea, but keep it clearly supported by the review.
-- No summary, no advice.
+- Each code must name a specific aspect AND its quality or direction — not just a neutral topic.
+  Good: "laggy multiplayer matchmaking", "intuitive inventory controls", "frustrating difficulty spike"
+  Bad: "matchmaking", "controls", "difficulty"
+- Codes must be grounded in the review text — do not invent concepts not present.
 {feedback_section}
 
 Output exactly as bullet points:
@@ -60,6 +62,9 @@ Check:
 1. Codes are grounded in the data (evidence in the review supports each code).
 2. Codes are not duplicates or near-duplicates of each other.
 3. Codes are concise concepts (short noun phrases, not vague or hallucinated).
+4. Codes are evaluatively specific — each names a concrete aspect AND its quality or
+   direction (e.g. "poor enemy AI behaviour", not just "enemy AI").
+   A code that is a neutral topic label with no direction should be flagged as FAIL.
 
 Respond with exactly one of:
 - PASS

@@ -2,7 +2,7 @@
 import argparse
 import json
 
-from paths import (
+from agents.core.paths import (
     CLUSTERED_CODES_PATH,
     CODEBOOK_PATH,
     DEFAULT_DATA_CSV,
@@ -14,9 +14,9 @@ from paths import (
     display_path,
     ensure_output_dirs,
 )
-from utils import extract_codes, log_step
+from agents.core.utils import extract_codes, log_step
 import pandas as pd
-from app import app
+from agents.core.app import app
 
 
 def _base_state(research_question: str) -> dict:
@@ -41,7 +41,6 @@ def _base_state(research_question: str) -> dict:
 
 
 def main() -> None:
-    # --- CLI ---
     p = argparse.ArgumentParser()
     p.add_argument("--open-coding-only", action="store_true", help="Run only open coding; save gt_codes_only.json and exit (so SGLang can be killed before axial).")
     p.add_argument("--axial-only", action="store_true", help="Load gt_codes_only.json and run only the axial step in the graph.")
@@ -60,13 +59,12 @@ def main() -> None:
     rq = args.research_question
     log_step("RESEARCH_QUESTION", rq)
 
-    # --- Staged runs: one graph invoke, then exit ---
     if args.high_level_only:
         if not CLUSTERED_CODES_PATH.is_file():
             print(f"Error: {display_path(CLUSTERED_CODES_PATH)} not found. Run axial step first.")
             raise SystemExit(1)
         state = _base_state(rq)
-        state["axial_mapping"] = "done"  # graph will run only high_level_code_generation
+        state["axial_mapping"] = "done"
         final_hl = app.invoke(state, config={"recursion_limit": 25})
         codebook = final_hl.get("codebook") or {}
         log_step("CODEBOOK_COMPLETE", f"Generated {len(codebook)} high-level labels. See {display_path(CODEBOOK_PATH)}")
@@ -81,7 +79,6 @@ def main() -> None:
             raise SystemExit(1)
         state = _base_state(rq)
         state["axial_mapping"] = "refine"
-        # Pre-load codebook so graph skips high_level_code_generation and goes straight to refine_cluster_assignments
         with open(CODEBOOK_PATH, encoding="utf-8") as f:
             existing_cb = json.load(f)
         state["codebook"] = existing_cb.get("codebook", {})
@@ -95,7 +92,7 @@ def main() -> None:
             print(f"Error: {display_path(HIERARCHY_PATH)} not found. Run hierarchy step first.")
             raise SystemExit(1)
         state = _base_state(rq)
-        state["axial_mapping"] = "graph"  # graph will run only graph_construction
+        state["axial_mapping"] = "graph"
         final_graph = app.invoke(state, config={"recursion_limit": 25})
         log_step("GRAPH_COMPLETE", final_graph.get("graph", ""))
         raise SystemExit(0)
@@ -120,7 +117,7 @@ def main() -> None:
             print(f"Error: {display_path(CODEBOOK_PATH)} not found. Run high-level step first.")
             raise SystemExit(1)
         state = _base_state(rq)
-        state["axial_mapping"] = "hierarchy"  # graph will run only hierarchy_construction
+        state["axial_mapping"] = "hierarchy"
         state["_sim_threshold"] = args.sim_threshold
         final_hier = app.invoke(state, config={"recursion_limit": 25})
         log_step("HIERARCHY_COMPLETE", final_hier.get("hierarchy", ""))
@@ -136,19 +133,16 @@ def main() -> None:
         log_step("AXIAL_COMPLETE", axial_mapping[:500] + "..." if len(axial_mapping) > 500 else axial_mapping)
         raise SystemExit(0)
 
-    # --- Full pipeline: open coding per review, then axial → ... → global_graph ---
     review_text_df = pd.read_csv(args.data)
     reviews = review_text_df["review_text"].astype(str).tolist()
     all_open_codes = []
 
-    # One graph invoke per review (open_coding + validate_open_codes, maybe retries)
     for idx, review in enumerate(reviews, start=1):
         state = _base_state(rq)
         state["raw_text"] = review
         final_state = app.invoke(state, config={"recursion_limit": 25})
         all_open_codes.append((idx, final_state.get("open_codes", "")))
 
-    # Persist open-coding outputs and flattened code list
     with open(OPEN_CODES_MARKDOWN_PATH, "w", encoding="utf-8") as f:
         for review_id, codes in all_open_codes:
             f.write(f"## Review {review_id}\n\n{codes}\n\n")
@@ -163,14 +157,12 @@ def main() -> None:
         log_step("OPEN_CODING_ONLY", "Exiting so SGLang can be killed before axial.")
         raise SystemExit(0)
 
-    # First invoke: axial (embed + K-means) -> END
     state = _base_state(rq)
     state["all_codes_for_axial"] = all_codes
     final_axial = app.invoke(state, config={"recursion_limit": 25})
     axial_mapping = final_axial.get("axial_mapping", "")
     log_step("AXIAL_COMPLETE", axial_mapping[:500] + "..." if len(axial_mapping) > 500 else axial_mapping)
 
-    # Second invoke: high-level labels then refine_cluster_assignments (axial_mapping = "refine")
     state = _base_state(rq)
     state["axial_mapping"] = "refine"
     final_refine = app.invoke(state, config={"recursion_limit": 25})
@@ -179,4 +171,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()  # CLI entry when run as script (e.g. python gt_agents.py --research-question "..." )
+    main()

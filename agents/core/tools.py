@@ -8,14 +8,14 @@ from typing import Any, Dict, List, Optional
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
-from prompts import (
+from .prompts import (
     open_coding_prompt,
     validate_open_codes_prompt,
     high_level_code_generation_prompt,
     refine_cluster_assignments_prompt,
     relationship_classification_prompt,
 )
-from paths import (
+from .paths import (
     CLUSTERED_CODES_PATH,
     CODEBOOK_PATH,
     CROSS_CLUSTER_EDGES_PATH,
@@ -28,7 +28,7 @@ from paths import (
     display_path,
     ensure_output_dirs,
 )
-from utils import clean_and_parse_json, log_step, remove_think_tags
+from .utils import clean_and_parse_json, log_step, remove_think_tags
 
 # 2. LLM Setup (vLLM)
 # ==================================================

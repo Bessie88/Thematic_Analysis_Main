@@ -4,8 +4,8 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 from langgraph.graph import END
 
-from paths import CLUSTERED_CODES_PATH, CODEBOOK_PATH
-from tools import (
+from .paths import CLUSTERED_CODES_PATH, CODEBOOK_PATH
+from .tools import (
     axial_coding,
     global_graph_construction,
     graph_construction,
@@ -15,7 +15,7 @@ from tools import (
     refine_cluster_assignments,
     validate_open_codes,
 )
-from utils import log_step, remove_think_tags
+from .utils import log_step, remove_think_tags
 
 # Max retries when validator returns FAIL (open coding)
 OPEN_CODING_MAX_RETRIES = 2

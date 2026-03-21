@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from paths import GT_AGENT_TRACE_LOG_PATH, ensure_output_dirs
+from .paths import GT_AGENT_TRACE_LOG_PATH, ensure_output_dirs
 
 LOG_FILE = GT_AGENT_TRACE_LOG_PATH
 

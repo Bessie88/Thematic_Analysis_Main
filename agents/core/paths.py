@@ -1,7 +1,7 @@
 """Centralized filesystem paths for the GT pipeline."""
 from pathlib import Path
 
-AGENTS_DIR = Path(__file__).resolve().parent
+AGENTS_DIR = Path(__file__).resolve().parent.parent
 OUTPUTS_DIR = AGENTS_DIR / "outputs"
 DATA_DIR = OUTPUTS_DIR / "data"
 LOGS_DIR = OUTPUTS_DIR / "logs"
