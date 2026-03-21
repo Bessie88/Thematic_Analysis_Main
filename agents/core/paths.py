@@ -18,6 +18,10 @@ GRAPH_PATH = DATA_DIR / "gt_graph.json"
 CROSS_CLUSTER_EDGES_PATH = DATA_DIR / "gt_cross_cluster_edges.jsonl"
 GLOBAL_GRAPH_PATH = DATA_DIR / "gt_global_graph.json"
 CLEANED_GLOBAL_GRAPH_PATH = DATA_DIR / "gt_global_graph_cleaned.json"
+RESEARCH_REPORT_PATH = DATA_DIR / "research_report.md"
+
+# Mistral 7B Instruct v0.3 for post-pipeline research report (SGLang --model-path).
+MISTRAL_INSTRUCT_WEIGHTS_DIR = WEIGHTS_DIR / "Mistral-7B-Instruct-v0.3"
 OPEN_CODES_MARKDOWN_PATH = DATA_DIR / "gt_open_codes_all_reviews.md"
 GRAPH_HTML_PATH = DATA_DIR / "gt_graph.html"
 

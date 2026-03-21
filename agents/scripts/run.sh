@@ -2,7 +2,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=8
 #SBATCH --mem=60G
-#SBATCH --time=0-06:00:00
+#SBATCH --time=0-12:00:00
 #SBATCH --gpus=h100_40gb:1
 #SBATCH --account=rrg-lingjzhu
 

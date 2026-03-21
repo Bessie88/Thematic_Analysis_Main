@@ -41,6 +41,37 @@ stop_sglang_server() {
     nvidia-smi 2>/dev/null || true
 }
 
+# Wait until OpenAI-compatible /v1/models responds (shared by Qwen and Mistral phases).
+# Args: port, log_file, pid, label
+wait_for_openai_ready() {
+    local port="$1"
+    local log_file="$2"
+    local pid="$3"
+    local phase_label="${4:-SGLang}"
+    local counter=0
+    echo "Waiting for $phase_label to become ready on port $port..."
+    while true; do
+        if curl -s "http://localhost:${port}/v1/models" | grep -q '"object":"list"'; then
+            echo "$phase_label is READY!"
+            return 0
+        fi
+        if [ $counter -ge $MAX_RETRIES ]; then
+            echo "Timeout waiting for $phase_label. Last 50 lines of $log_file:"
+            tail -n 50 "$log_file"
+            stop_sglang_server "$pid"
+            return 1
+        fi
+        if ! ps -p "$pid" > /dev/null 2>&1; then
+            echo "$phase_label process died unexpectedly. Check $log_file."
+            tail -n 50 "$log_file"
+            return 1
+        fi
+        echo "Waiting for $phase_label... ($counter/$MAX_RETRIES)"
+        sleep 5
+        ((counter++))
+    done
+}
+
 # --- 2. Launch Server in Background ---
 echo "Starting SGLang server..."
 # Run python directly (no subshell) so $! is the real server PID.
@@ -55,35 +86,11 @@ python -m sglang.launch_server \
 SERVER_PID=$!
 echo "Server PID: $SERVER_PID"
 
-# --- 3. The 'Wait-For-Ready' Loop ---
-echo "Waiting for server to become ready..."
-
 MAX_RETRIES=2400
-COUNTER=0
-
-while true; do
-    if curl -s http://localhost:$PORT/v1/models | grep -q '"object":"list"'; then
-        echo "Server is READY!"
-        break
-    fi
-
-    if [ $COUNTER -ge $MAX_RETRIES ]; then
-        echo "Timeout waiting for server. Printing last 50 lines of log:"
-        tail -n 50 "$SERVER_LOG"
-        stop_sglang_server "$SERVER_PID"
-        exit 1
-    fi
-
-    if ! ps -p $SERVER_PID > /dev/null 2>&1; then
-        echo "Server process died unexpectedly. Check server.log."
-        tail -n 50 "$SERVER_LOG"
-        exit 1
-    fi
-
-    echo "Waiting for server... ($COUNTER/$MAX_RETRIES)"
-    sleep 5
-    ((COUNTER++))
-done
+# --- 3. The 'Wait-For-Ready' Loop ---
+if ! wait_for_openai_ready "$PORT" "$SERVER_LOG" "$SERVER_PID" "SGLang (Qwen)"; then
+    exit 1
+fi
 
 # --- 4. Open coding only (then kill SGLang so axial can use GPU for embed model) ---
 echo "Starting Open Coding (agents.cli --open-coding-only)..."
@@ -134,27 +141,9 @@ python -m sglang.launch_server \
   --context-length 8000 \
   >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
-COUNTER=0
-while true; do
-    if curl -s http://localhost:$PORT/v1/models | grep -q '"object":"list"'; then
-        echo "SGLang READY for high-level step."
-        break
-    fi
-    if [ $COUNTER -ge $MAX_RETRIES ]; then
-        echo "Timeout waiting for SGLang (phase 3)."
-        tail -n 50 "$SERVER_LOG"
-        stop_sglang_server "$SERVER_PID"
-        exit 1
-    fi
-    if ! ps -p $SERVER_PID > /dev/null 2>&1; then
-        echo "SGLang died (phase 3)."
-        tail -n 50 "$SERVER_LOG"
-        exit 1
-    fi
-    echo "Waiting for SGLang... ($COUNTER/$MAX_RETRIES)"
-    sleep 5
-    ((COUNTER++))
-done
+if ! wait_for_openai_ready "$PORT" "$SERVER_LOG" "$SERVER_PID" "SGLang (Qwen, phase 2)"; then
+    exit 1
+fi
 
 # --- 8. High-level code generation ---
 echo "Starting high-level code generation (agents.cli --high-level-only)..."
@@ -199,6 +188,43 @@ fi
 echo "Starting global graph construction (agents.cli --global-graph-only)..."
 python -m agents.cli --global-graph-only --research-question "$RESEARCH_QUESTION"
 GLOBAL_EXIT=$?
-echo "Global graph step finished with exit code $GLOBAL_EXIT. Killing SGLang..."
+echo "Global graph step finished with exit code $GLOBAL_EXIT."
+if [ $GLOBAL_EXIT -ne 0 ]; then
+    echo "Stopping SGLang after global graph failure..."
+    stop_sglang_server "$SERVER_PID"
+    exit $GLOBAL_EXIT
+fi
+
+echo "Stopping Qwen SGLang to free GPU for Mistral research-report server..."
 stop_sglang_server "$SERVER_PID"
-exit $GLOBAL_EXIT
+
+REPORT_MODEL_PATH="$AGENTS_ROOT/weights/Mistral-7B-Instruct-v0.3"
+if [ ! -d "$REPORT_MODEL_PATH" ]; then
+    echo "Error: Mistral weights not found at $REPORT_MODEL_PATH"
+    echo "Run: bash \"$AGENTS_ROOT/scripts/download_mistral_7b_v03.sh\""
+    exit 1
+fi
+
+REPORT_SERVER_LOG="$AGENTS_ROOT/report_server.log"
+echo "Starting Mistral SGLang for research report..."
+python -m sglang.launch_server \
+  --model-path "$REPORT_MODEL_PATH" \
+  --port $PORT \
+  --host 0.0.0.0 \
+  --served-model-name llm \
+  --mem-fraction-static 0.85 \
+  --context-length 8192 \
+  >"$REPORT_SERVER_LOG" 2>&1 &
+REPORT_PID=$!
+echo "Mistral report server PID: $REPORT_PID"
+
+if ! wait_for_openai_ready "$PORT" "$REPORT_SERVER_LOG" "$REPORT_PID" "SGLang (Mistral report)"; then
+    exit 1
+fi
+
+echo "Starting research report (agents.cli --report-only)..."
+python -m agents.cli --report-only --research-question "$RESEARCH_QUESTION"
+REPORT_STEP_EXIT=$?
+echo "Research report step finished with exit code $REPORT_STEP_EXIT. Stopping Mistral SGLang..."
+stop_sglang_server "$REPORT_PID"
+exit $REPORT_STEP_EXIT

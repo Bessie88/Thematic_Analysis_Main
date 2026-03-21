@@ -5,6 +5,14 @@ Post-processing after global graph construction. Reduces a noisy global concept 
 to a compact codebook by: equivalence closure and representative selection, merge and
 redirect, collapse low-frequency children (direct edges only), remove orphans,
 rebuild canonical_nodes and direct edges, recompute inferred_edges.
+
+Fixes applied vs previous version:
+  1. Self-loop guard in _infer_edges_from_direct (a == c check).
+  2. Rep chain re-resolution after collapse loop (multi-hop collapse was leaving
+     intermediate nodes pointing at already-collapsed targets).
+  3. Cycle-breaking pass before BFS: mutual A→B / B→A edges are resolved by
+     keeping the direction where the parent has higher frequency.
+  4. min_freq default lowered to 3; see scaling note on run_cleanup.
 """
 
 import json
@@ -68,15 +76,11 @@ def equivalence_components(merge_groups: List[List[str]]) -> List[List[str]]:
     parent: Dict[str, str] = {}
 
     def find(x: str) -> str:
-        # Iterative find with path compression.
         root = x
-        # First walk up to the root.
         while root in parent and parent[root] != root:
             root = parent[root]
-        # If x was unseen, initialize it as its own parent.
         if root not in parent:
             parent[root] = root
-        # Path compression on the way back down.
         while x in parent and parent[x] != root:
             parent_x = parent[x]
             parent[x] = root
@@ -110,12 +114,46 @@ def _in_degree_from_edges(edges: List[Dict[str, str]]) -> Dict[str, int]:
     return dict(indeg)
 
 
+def _break_cycles(
+    direct_edges: List[Dict[str, str]],
+    datapoint_freq: Dict[str, int],
+) -> List[Dict[str, str]]:
+    """
+    Remove one direction of any mutual A→B / B→A pair in direct_edges.
+    Keeps the direction where the parent has strictly higher frequency.
+    When frequencies are equal, keeps the lexicographically smaller parent
+    so the result is deterministic.
+    Returns the cleaned edge list.
+    """
+    edge_set = {(e["parent"], e["child"]) for e in direct_edges}
+    kept: List[Dict[str, str]] = []
+    for e in direct_edges:
+        p, c = e["parent"], e["child"]
+        if (c, p) in edge_set:
+            fp = datapoint_freq.get(p, 0)
+            fc = datapoint_freq.get(c, 0)
+            # Keep p→c only if p has higher freq, or equal freq and p < c lexicographically.
+            if fp > fc or (fp == fc and p < c):
+                kept.append(e)
+            # else drop — the reverse direction will be kept when we process that edge
+        else:
+            kept.append(e)
+    return kept
+
+
 def run_cleanup(
     graph_path: Path,
     clustered_codes_path: Path,
     codes_only_path: Path,
     output_path: Path,
-    min_freq: int = 6,
+    # min_freq scaling guide (approximate — adjust based on your corpus size):
+    #   ~100  reviews  → min_freq = 2
+    #   ~1000 reviews  → min_freq = 3   ← current default
+    #   ~5000 reviews  → min_freq = 5
+    #   ~50k  reviews  → min_freq = 10
+    # Rule of thumb: a concept should appear in at least 0.3–0.5% of the corpus
+    # to be considered stable enough to keep in the final codebook.
+    min_freq: int = 3,
     w_freq: float = 1.0,
     w_indeg: float = 1.0,
     include_inferred_edges: bool = True,
@@ -125,7 +163,6 @@ def run_cleanup(
     """
     nodes, merge_groups, direct_edges = load_graph(graph_path)
     datapoint_freq = load_datapoint_frequency(clustered_codes_path, codes_only_path)
-    # Ensure every node has a frequency (0 if never seen in reviews)
     for n in nodes:
         if n not in datapoint_freq:
             datapoint_freq[n] = 0
@@ -156,19 +193,15 @@ def run_cleanup(
             new_edges.add((p, q))
     direct_edges = [{"parent": p, "child": q} for p, q in sorted(new_edges)]
 
-    # Aggregate frequency to representative per component
     agg_freq: Dict[str, int] = defaultdict(int)
     for n in nodes:
         agg_freq[rep[n]] += datapoint_freq.get(n, 0)
     datapoint_freq = dict(agg_freq)
 
-    # Update in-degree from new direct edges for step 3
     in_deg = _in_degree_from_edges(direct_edges)
-    # All nodes that exist after step 2 (representatives + standalones)
     current_nodes = set(rep[n] for n in nodes)
 
     # --- Step 3: Collapse low-frequency children (only direct edges) ---
-    # Build child -> list of direct parents from current direct_edges
     direct_parents: Dict[str, List[str]] = defaultdict(list)
     for e in direct_edges:
         direct_parents[e["child"]].append(e["parent"])
@@ -176,7 +209,6 @@ def run_cleanup(
     orphan_set: Set[str] = set()
 
     def _parent_sort_key(p: str) -> Tuple[int, int, str]:
-        # Higher datapoint frequency first, then higher in-degree, then lexicographic
         return (-datapoint_freq.get(p, 0), -in_deg.get(p, 0), p)
 
     for n in list(current_nodes):
@@ -186,14 +218,19 @@ def run_cleanup(
         if not parents:
             orphan_set.add(n)
             continue
-        # Choose parent: highest frequency, then in-degree, then lexicographic
         chosen = min(parents, key=_parent_sort_key)
         for x in nodes:
             if rep[x] == n:
                 rep[x] = chosen
         datapoint_freq[chosen] = datapoint_freq.get(chosen, 0) + datapoint_freq.get(n, 0)
 
-    # Redirect edges again after collapse
+    # FIX: re-resolve rep chains — multi-hop collapses (A→B→C) leave A pointing
+    # at B even after B was itself collapsed into C. Flatten all chains here.
+    for x in nodes:
+        while rep[rep[x]] != rep[x]:
+            rep[x] = rep[rep[x]]
+
+    # Redirect edges after collapse
     new_edges = set()
     for e in direct_edges:
         p, q = rep[e["parent"]], rep[e["child"]]
@@ -205,9 +242,24 @@ def run_cleanup(
     current_nodes = set(rep[n] for n in nodes) - orphan_set
     direct_edges = [e for e in direct_edges if e["parent"] in current_nodes and e["child"] in current_nodes]
 
-    # --- Step 5: Rebuild canonical_nodes, direct edges, optional inferred_edges ---
+    # --- Step 4b: Break mutual cycles before BFS ---
+    # The hierarchy step can produce contradictory edges (A subsumes B in one
+    # cluster, B subsumes A in another). Both survive into the global graph and
+    # cause self-loops in BFS transitivity. Resolve by keeping the direction
+    # where the parent has higher datapoint frequency.
+    direct_edges = _break_cycles(direct_edges, datapoint_freq)
+
+    # --- Step 5: Build provenance map (raw code → final node) ---
+    # Saved in the output so the evidence panel can trace which original open
+    # codes collapsed into each final concept node.
+    provenance: Dict[str, List[str]] = defaultdict(list)
+    for original_code in nodes:
+        final = rep.get(original_code, original_code)
+        if final in current_nodes:
+            provenance[final].append(original_code)
+
+    # --- Step 6: Rebuild canonical_nodes, direct edges, optional inferred_edges ---
     canonical_nodes = sorted(current_nodes)
-    # Recompute inferred_edges from direct edges only (BFS transitivity)
     if include_inferred_edges:
         _, inferred_edges = _infer_edges_from_direct(direct_edges, canonical_nodes)
     else:
@@ -218,6 +270,7 @@ def run_cleanup(
         "edges": direct_edges,
         "inferred_edges": inferred_edges,
         "node_frequencies": {n: datapoint_freq.get(n, 0) for n in canonical_nodes},
+        "code_provenance": {n: sorted(set(provenance[n])) for n in canonical_nodes},
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
@@ -244,6 +297,8 @@ def _infer_edges_from_direct(
     while queue:
         a, b = queue.popleft()
         for c in list(out_edges[b]):
+            if a == c:          # FIX: guard against self-loops from cycles
+                continue
             if (a, c) in edge_set:
                 continue
             if (c, a) in edge_set:
@@ -262,7 +317,16 @@ def main() -> None:
     parser.add_argument("--clustered", default=None, help="Path to gt_clustered_codes.json")
     parser.add_argument("--codes-only", default=None, help="Path to gt_codes_only.json")
     parser.add_argument("--out", default=None, help="Output path for cleaned graph JSON")
-    parser.add_argument("--min-freq", type=int, default=6, help="Min datapoint frequency to keep (default 6)")
+    parser.add_argument(
+        "--min-freq",
+        type=int,
+        default=3,
+        help=(
+            "Min datapoint frequency to keep a node (default 3 for ~1000 reviews). "
+            "Scale with corpus size: ~100 reviews→2, ~1k→3, ~5k→5, ~50k→10. "
+            "Rule of thumb: concept should appear in at least 0.3-0.5%% of reviews."
+        ),
+    )
     parser.add_argument("--w-freq", type=float, default=1.0, help="Weight for datapoint frequency in representative score")
     parser.add_argument("--w-indeg", type=float, default=1.0, help="Weight for in-degree in representative score")
     parser.add_argument("--no-inferred", action="store_true", help="Do not compute inferred_edges")
@@ -289,7 +353,11 @@ def main() -> None:
     n_nodes = len(result["canonical_nodes"])
     n_edges = len(result["edges"])
     n_inferred = len(result.get("inferred_edges", []))
-    print(f"Wrote {output_path}: {n_nodes} nodes, {n_edges} direct edges, {n_inferred} inferred edges.")
+    n_provenance_entries = sum(len(v) for v in result.get("code_provenance", {}).values())
+    print(
+        f"Wrote {output_path}: {n_nodes} nodes, {n_edges} direct edges, "
+        f"{n_inferred} inferred edges, {n_provenance_entries} provenance mappings."
+    )
 
 
 if __name__ == "__main__":

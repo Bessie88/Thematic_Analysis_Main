@@ -130,7 +130,7 @@ def agent_node(state: GTState):
             "step": step,
         }
     if state.get("axial_mapping") == "hierarchy" and not state.get("hierarchy"):
-        sim_threshold = state.get("_sim_threshold", 0.6)
+        sim_threshold = state.get("_sim_threshold", 0.75)
         return {
             "tool_call": {"tool": "hierarchy_construction", "args": {"research_question": rq, "sim_threshold": sim_threshold}},
             "step": step,
@@ -141,7 +141,7 @@ def agent_node(state: GTState):
             "step": step,
         }
     if state.get("axial_mapping") == "global_graph" and not state.get("global_graph"):
-        sim_threshold = state.get("_sim_threshold", 0.7)
+        sim_threshold = state.get("_sim_threshold", 0.75)
         skip_cross = state.get("_skip_cross_cluster", False)
         return {
             "tool_call": {

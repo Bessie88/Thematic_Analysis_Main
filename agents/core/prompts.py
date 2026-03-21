@@ -98,19 +98,19 @@ Output ONLY valid JSON, no other text. Example: {{"label": "Interface usability 
 
 def refine_cluster_assignments_prompt(label: str, bulleted: str, other_str: str) -> str:
     """Return the prompt for identifying codes that belong in another cluster (MOVE or NONE).
-    other_str contains only the top-5 most similar clusters by embedding distance.
+    other_str lists up to five alternate cluster labels (most similar to ``label`` by embedding).
     """
     return f"""You are reviewing the codes assigned to a cluster labeled "{label}".
 
 Codes in this cluster:
 {bulleted}
 
-The only permitted move targets are these 5 clusters (chosen because they are the most similar to "{label}"):
+The only permitted move targets are these clusters (at most five, chosen as the most similar to "{label}" by embedding — you may not suggest any other label):
 {other_str}
 
 A code should be moved ONLY if ALL of the following are true:
 1. It shares zero conceptual overlap with "{label}" — not just a weaker fit, but genuinely no overlap.
-2. It maps unambiguously to exactly one of the five clusters above — not a toss-up between two.
+2. It maps unambiguously to exactly one of the clusters listed above — not a toss-up between two.
 3. You would bet confidently on this move; any doubt means leave it.
 
 For each code that meets all three criteria, output exactly:

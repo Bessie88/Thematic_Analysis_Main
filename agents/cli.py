@@ -1,6 +1,7 @@
 """CLI entry point for the GT pipeline."""
 import argparse
 import json
+from pathlib import Path
 
 from agents.core.paths import (
     CLUSTERED_CODES_PATH,
@@ -11,9 +12,11 @@ from agents.core.paths import (
     GT_CODES_ONLY_PATH,
     HIERARCHY_PATH,
     OPEN_CODES_MARKDOWN_PATH,
+    RESEARCH_REPORT_PATH,
     display_path,
     ensure_output_dirs,
 )
+from agents.core.report import generate_research_report
 from agents.core.utils import extract_codes, log_step
 import pandas as pd
 from agents.core.app import app
@@ -49,8 +52,17 @@ def main() -> None:
     p.add_argument("--hierarchy-only", action="store_true", help="Run hierarchy construction (relationship classification + edges). LLM must be up.")
     p.add_argument("--graph-only", action="store_true", help="Run graph construction (transitivity inference). No LLM needed.")
     p.add_argument("--global-graph-only", action="store_true", help="Run global graph construction (merge clusters, optional cross-cluster linking). LLM needed unless --skip-cross-cluster.")
+    p.add_argument("--report-only", action="store_true", help="Generate research_report.md from gt_global_graph.json (Mistral/SGLang report server must be up).")
+    p.add_argument("--graph-path", default=None, help="Path to global graph JSON for --report-only (default: outputs/data/gt_global_graph.json).")
+    p.add_argument("--report-api-base", default=None, help="OpenAI-compatible API base for report (default: env REPORT_OPENAI_BASE or http://localhost:8000/v1).")
+    p.add_argument("--report-model", default=None, help="Model name for report (default: env REPORT_MODEL_NAME or llm).")
     p.add_argument("--skip-cross-cluster", action="store_true", help="Skip cross-cluster linking in global graph (LLM-free).")
-    p.add_argument("--sim-threshold", type=float, default=0.6, help="Cosine similarity threshold for hierarchy pair filtering (default 0.6).")
+    p.add_argument(
+        "--sim-threshold",
+        type=float,
+        default=0.75,
+        help="Cosine similarity threshold for embedding pre-filter: hierarchy pair filtering and global-graph cross-cluster linking (default 0.75).",
+    )
     p.add_argument("--research-question", required=True, help="Research question that conditions the entire GT pipeline.")
     p.add_argument("--data", default=str(DEFAULT_DATA_CSV), help="CSV with review_text column.")
     args = p.parse_args()
@@ -106,10 +118,25 @@ def main() -> None:
             raise SystemExit(1)
         state = _base_state(rq)
         state["axial_mapping"] = "global_graph"
-        state["_sim_threshold"] = 0.7
+        state["_sim_threshold"] = args.sim_threshold
         state["_skip_cross_cluster"] = args.skip_cross_cluster
         final_global = app.invoke(state, config={"recursion_limit": 25})
         log_step("GLOBAL_GRAPH_COMPLETE", final_global.get("global_graph", ""))
+        raise SystemExit(0)
+
+    if args.report_only:
+        graph_file = Path(args.graph_path) if args.graph_path else GLOBAL_GRAPH_PATH
+        if not graph_file.is_file():
+            print(f"Error: {graph_file} not found. Run global graph step first (or pass --graph-path).")
+            raise SystemExit(1)
+        generate_research_report(
+            rq,
+            graph_file,
+            RESEARCH_REPORT_PATH,
+            api_base=args.report_api_base,
+            model=args.report_model,
+        )
+        log_step("RESEARCH_REPORT_COMPLETE", f"Wrote {display_path(RESEARCH_REPORT_PATH)}")
         raise SystemExit(0)
 
     if args.hierarchy_only:
