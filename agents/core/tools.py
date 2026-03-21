@@ -536,19 +536,6 @@ def _infer_graph_per_cluster(
     return final_edges, inferred_edges
 
 
-def _infer_graph_global(
-    merge_groups: List[List[str]],
-    edges: List[Dict[str, Any]],
-    canonical_nodes: List[str],
-) -> tuple:
-    """
-    Same as _infer_graph_per_cluster but for global graph.
-    Apply BFS transitivity, equivalence closure, deduction-first conflict.
-    Returns (final_edges_list, inferred_edges_list).
-    """
-    return _infer_graph_per_cluster(merge_groups, edges, canonical_nodes)
-
-
 @tool
 def global_graph_construction(
     research_question: str = "",
@@ -559,7 +546,7 @@ def global_graph_construction(
     """
     Step 6 (LOGOS): Global graph construction.
     Merge all per-cluster nodes and edges, optionally add cross-cluster links via LLM,
-    apply global transitivity and equivalence closure, write gt_global_graph.json.
+    write gt_global_graph.json with direct edges only (no global transitive closure).
     """
     graph_path = str(GRAPH_PATH)
     codebook_path = str(CODEBOOK_PATH)
@@ -755,9 +742,10 @@ def global_graph_construction(
     merge_groups = [sorted(set(g)) for g in merge_groups_map.values() if len(g) > 1]
     canonical_nodes = sorted(set(find(n) for n in all_node_strings))
 
-    # 5. Global active inference (transitivity + equivalence closure + deduction-first)
+    # 5. Persist direct edges only (skip global transitive closure to keep artifact small)
     edges_list = [{"parent": u, "child": v} for u, v in sorted(edge_set)]
-    final_edges, inferred_edges = _infer_graph_global(merge_groups, edges_list, canonical_nodes)
+    final_edges = edges_list
+    inferred_edges: List[Dict[str, str]] = []
 
     out = {
         "canonical_nodes": canonical_nodes,
@@ -770,7 +758,7 @@ def global_graph_construction(
         json.dump(out, f, indent=2)
 
     n_cross_new = len(cross_cluster_edges) - existing_cross_count if not skip_cross_cluster else 0
-    summary = f"Global graph: {len(canonical_nodes)} nodes, {len(final_edges)} edges ({len(inferred_edges)} inferred). Cross-cluster: {'skipped' if skip_cross_cluster else f'{n_cross_new} new edges'}. See {display_path(GLOBAL_GRAPH_PATH)}"
+    summary = f"Global graph: {len(canonical_nodes)} nodes, {len(final_edges)} direct edges (closure not persisted). Cross-cluster: {'skipped' if skip_cross_cluster else f'{n_cross_new} new edges'}. See {display_path(GLOBAL_GRAPH_PATH)}"
     return summary
 
 
