@@ -3,7 +3,7 @@ import json
 import os
 import re
 from collections import Counter, defaultdict, deque
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
 from langchain_core.tools import tool
@@ -207,11 +207,23 @@ def _axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str
             with open(codes_only_path, encoding="utf-8") as f:
                 codes_only_data = json.load(f)
             raw_cpr = codes_only_data.get("codes_per_review", [])
-            # Remap codes_per_review to canonical forms
-            codes_per_review = [
-                list(dict.fromkeys(dedup_map.get(c, c) for c in review_codes))
-                for review_codes in raw_cpr
-            ]
+            # Each item is [review_id, [code, ...]] — not a flat list of codes
+            for item in raw_cpr:
+                if not isinstance(item, (list, tuple)) or len(item) < 2:
+                    continue
+                review_id, review_codes = item[0], item[1]
+                if not isinstance(review_codes, list):
+                    continue
+                seen: Set[str] = set()
+                row: List[str] = []
+                for c in review_codes:
+                    if not isinstance(c, str):
+                        c = str(c)
+                    canon = dedup_map.get(c, c)
+                    if canon not in seen:
+                        seen.add(canon)
+                        row.append(canon)
+                codes_per_review.append([review_id, row])
         except (json.JSONDecodeError, OSError):
             pass
 
