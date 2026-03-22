@@ -13,20 +13,45 @@ Fixes applied vs previous version:
   3. Cycle-breaking pass before BFS: mutual A→B / B→A edges are resolved by
      keeping the direction where the parent has higher frequency.
   4. min_freq default lowered to 3; see scaling note on run_cleanup.
+  5. Corpus frequencies use normalize_label() so graph nodes match codes_per_review
+     despite quote/whitespace differences (avoids false zero-frequency collapse).
+  6. Cluster representatives (codebook labels) use review-level cluster support:
+     frequency is at least the count of reviews containing any code from that cluster.
 """
 
-import json
 import argparse
+import json
+import re
 from collections import defaultdict, deque
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from agents.core.paths import (
     CLEANED_GLOBAL_GRAPH_PATH,
     CLUSTERED_CODES_PATH,
+    CODEBOOK_PATH,
     GLOBAL_GRAPH_PATH,
     GT_CODES_ONLY_PATH,
 )
+
+
+def normalize_label(s: str) -> str:
+    """
+    Normalize theme labels so graph JSON strings align with codes_per_review keys.
+
+    Strips leading/trailing whitespace, collapses internal runs of whitespace to a
+    single space, and removes outer layers of matching single/double quotes
+    (handles e.g. '\\\"frustrating difficulty\\\"' vs 'frustrating difficulty').
+    """
+    if not isinstance(s, str):
+        s = str(s)
+    t = s.strip()
+    t = re.sub(r"\s+", " ", t)
+    quote_chars = "\"'"
+    while len(t) >= 2 and t[0] == t[-1] and t[0] in quote_chars:
+        t = t[1:-1].strip()
+        t = re.sub(r"\s+", " ", t)
+    return t
 
 
 def load_graph(path: Path) -> Tuple[List[str], List[List[str]], List[Dict[str, str]]]:
@@ -44,8 +69,10 @@ def load_datapoint_frequency(
     codes_only_path: Path,
 ) -> Dict[str, int]:
     """
-    Compute datapoint_frequency: for each code, number of reviews (datapoints) that contain it.
-    Tries clustered_path first (codes_per_review), then codes_only_path.
+    Compute datapoint frequency keyed by **normalize_label(code)**.
+
+    Counts each normalized code at most once per review. This matches graph
+    nodes that differ only by quoting/whitespace from corpus strings.
     """
     freq: Dict[str, int] = defaultdict(int)
 
@@ -56,15 +83,130 @@ def load_datapoint_frequency(
             data = json.load(f)
         codes_per_review = data.get("codes_per_review", [])
         for item in codes_per_review:
-            review_id, codes = item[0], item[1]
+            _review_id, codes = item[0], item[1]
             seen_in_review: Set[str] = set()
             for c in codes:
-                if c not in seen_in_review:
-                    seen_in_review.add(c)
-                    freq[c] += 1
+                key = normalize_label(c)
+                if key not in seen_in_review:
+                    seen_in_review.add(key)
+                    freq[key] += 1
         if codes_per_review:
             break
     return dict(freq)
+
+
+def load_codes_per_review_list(
+    clustered_path: Path,
+    codes_only_path: Path,
+) -> List[Any]:
+    """Return codes_per_review from the first file that has a non-empty list."""
+    for path in (clustered_path, codes_only_path):
+        if not path.is_file():
+            continue
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        cpr = data.get("codes_per_review", [])
+        if cpr:
+            return cpr
+    return []
+
+
+def _build_code_to_cluster_map(cluster_to_codes: Dict[str, List[str]]) -> Dict[str, str]:
+    """Map raw code string and normalized form → cluster id (string)."""
+    m: Dict[str, str] = {}
+    for cid, codes in cluster_to_codes.items():
+        scid = str(cid)
+        for c in codes:
+            m[c] = scid
+            nk = normalize_label(c)
+            if nk not in m:
+                m[nk] = scid
+    return m
+
+
+def cluster_review_support_counts(
+    cluster_to_codes: Dict[str, List[str]],
+    codes_per_review: List[Any],
+) -> Dict[str, int]:
+    """
+    For each cluster id, number of reviews that contain at least one open code
+    assigned to that cluster (via cluster_to_codes).
+    """
+    code_to_cid = _build_code_to_cluster_map(cluster_to_codes)
+    support: Dict[str, int] = defaultdict(int)
+    for item in codes_per_review:
+        codes = item[1]
+        touched: Set[str] = set()
+        for c in codes:
+            cid = code_to_cid.get(c)
+            if cid is None:
+                cid = code_to_cid.get(normalize_label(c))
+            if cid is not None:
+                touched.add(cid)
+        for cid in touched:
+            support[cid] += 1
+    return dict(support)
+
+
+def _rep_normalized_to_cid(codebook: Dict[str, str]) -> Dict[str, str]:
+    """normalized rep label → cluster id string."""
+    out: Dict[str, str] = {}
+    for cid, rep in codebook.items():
+        out[normalize_label(rep)] = str(cid)
+    return out
+
+
+def apply_representative_support(
+    datapoint_freq: Dict[str, int],
+    all_labels: Set[str],
+    codebook_path: Path,
+    clustered_codes_path: Path,
+    codes_only_path: Path,
+    verbose: bool = False,
+) -> None:
+    """
+    In-place: cluster high-level representatives (codebook labels) rarely appear
+    verbatim in reviews. Set their frequency to at least the number of reviews
+    that contain any code from that cluster, so cleanup does not treat them as
+    unsupported (max with any existing literal normalized count).
+    """
+    if not codebook_path.is_file():
+        if verbose:
+            print(f"[codebook_cleanup] representative support: skip (no codebook at {codebook_path})")
+        return
+    with open(codebook_path, encoding="utf-8") as f:
+        cb = json.load(f)
+    codebook = cb.get("codebook", {})
+    cluster_to_codes = cb.get("cluster_to_codes", {})
+    if not codebook or not cluster_to_codes:
+        if verbose:
+            print("[codebook_cleanup] representative support: skip (empty codebook/cluster_to_codes)")
+        return
+    cpr = load_codes_per_review_list(clustered_codes_path, codes_only_path)
+    if not cpr:
+        if verbose:
+            print("[codebook_cleanup] representative support: skip (no codes_per_review)")
+        return
+    support = cluster_review_support_counts(cluster_to_codes, cpr)
+    rep_norm_to_cid = _rep_normalized_to_cid(codebook)
+    boosted = 0
+    for label in all_labels:
+        nl = normalize_label(label)
+        cid = rep_norm_to_cid.get(nl)
+        if cid is None:
+            continue
+        sup = support.get(cid, 0)
+        prev = datapoint_freq.get(label, 0)
+        new_v = max(prev, sup)
+        datapoint_freq[label] = new_v
+        if new_v > prev:
+            boosted += 1
+    if verbose:
+        n_reps = len(codebook)
+        print(
+            f"[codebook_cleanup] representative support: {n_reps} clusters in codebook; "
+            f"{boosted} graph labels matched a rep and got frequency ≥ cluster review count"
+        )
 
 
 def equivalence_components(merge_groups: List[List[str]]) -> List[List[str]]:
@@ -157,15 +299,70 @@ def run_cleanup(
     w_freq: float = 1.0,
     w_indeg: float = 1.0,
     include_inferred_edges: bool = True,
+    verbose: bool = False,
+    codebook_path: Optional[Path] = None,
+    use_representative_support: bool = True,
 ) -> Dict[str, Any]:
     """
     Run LOGOS Step 6 codebook clean-up and return the cleaned graph dict.
     """
     nodes, merge_groups, direct_edges = load_graph(graph_path)
-    datapoint_freq = load_datapoint_frequency(clustered_codes_path, codes_only_path)
-    for n in nodes:
-        if n not in datapoint_freq:
-            datapoint_freq[n] = 0
+    freq_norm = load_datapoint_frequency(clustered_codes_path, codes_only_path)
+    cb_path = codebook_path if codebook_path is not None else CODEBOOK_PATH
+
+    all_labels: Set[str] = set(nodes)
+    for g in merge_groups:
+        all_labels.update(g)
+    for e in direct_edges:
+        all_labels.add(e["parent"])
+        all_labels.add(e["child"])
+
+    datapoint_freq: Dict[str, int] = {}
+    for label in all_labels:
+        datapoint_freq[label] = freq_norm.get(normalize_label(label), 0)
+
+    if use_representative_support:
+        apply_representative_support(
+            datapoint_freq,
+            all_labels,
+            cb_path,
+            clustered_codes_path,
+            codes_only_path,
+            verbose=verbose,
+        )
+
+    if verbose:
+        n_labels = len(all_labels)
+        n_zero = sum(1 for v in datapoint_freq.values() if v == 0)
+        raw_freq: Dict[str, int] = defaultdict(int)
+        for path in (clustered_codes_path, codes_only_path):
+            if not path.is_file():
+                continue
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            cpr = data.get("codes_per_review", [])
+            for item in cpr:
+                seen: Set[str] = set()
+                for c in item[1]:
+                    if c not in seen:
+                        seen.add(c)
+                        raw_freq[c] += 1
+            if cpr:
+                break
+        n_zero_raw = sum(1 for lab in all_labels if raw_freq.get(lab, 0) == 0)
+        n_recovered_norm = sum(
+            1
+            for lab in all_labels
+            if raw_freq.get(lab, 0) == 0 and freq_norm.get(normalize_label(lab), 0) > 0
+        )
+        print(
+            f"[codebook_cleanup] frequency alignment: {n_labels} graph labels, "
+            f"{n_zero} with zero count after normalized corpus keys + rep support"
+        )
+        print(
+            f"[codebook_cleanup] exact raw-key match would leave {n_zero_raw} labels at zero; "
+            f"normalized corpus keys alone recover {n_recovered_norm} of those"
+        )
 
     # --- Step 1: Equivalence closure and representative per component ---
     components = equivalence_components(merge_groups)
@@ -330,12 +527,28 @@ def main() -> None:
     parser.add_argument("--w-freq", type=float, default=1.0, help="Weight for datapoint frequency in representative score")
     parser.add_argument("--w-indeg", type=float, default=1.0, help="Weight for in-degree in representative score")
     parser.add_argument("--no-inferred", action="store_true", help="Do not compute inferred_edges")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Print frequency alignment stats (raw vs normalized corpus keys vs graph labels)",
+    )
+    parser.add_argument(
+        "--codebook",
+        default=None,
+        help="Path to codebook.json (default: agents outputs/data/codebook.json)",
+    )
+    parser.add_argument(
+        "--no-rep-support",
+        action="store_true",
+        help="Do not boost cluster representative labels with per-cluster review counts",
+    )
     args = parser.parse_args()
 
     graph_path = Path(args.graph) if args.graph else GLOBAL_GRAPH_PATH
     clustered_path = Path(args.clustered) if args.clustered else CLUSTERED_CODES_PATH
     codes_only_path = Path(args.codes_only) if args.codes_only else GT_CODES_ONLY_PATH
     output_path = Path(args.out) if args.out else CLEANED_GLOBAL_GRAPH_PATH
+    codebook_path = Path(args.codebook) if args.codebook else CODEBOOK_PATH
 
     if not graph_path.is_file():
         raise SystemExit(f"Graph not found: {graph_path}")
@@ -349,6 +562,9 @@ def main() -> None:
         w_freq=args.w_freq,
         w_indeg=args.w_indeg,
         include_inferred_edges=not args.no_inferred,
+        verbose=args.verbose,
+        codebook_path=codebook_path,
+        use_representative_support=not args.no_rep_support,
     )
     n_nodes = len(result["canonical_nodes"])
     n_edges = len(result["edges"])

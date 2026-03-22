@@ -23,14 +23,14 @@ Research Question: {research_question}
 Focus on aspects of the review that are relevant to the research question above.
 
 Rules:
-- Produce 1 to 5 codes total (depending on content and length of the review).
+- Produce 1 to 3 codes total (depending on content and length of the review).
 - Each code must be a short noun phrase (2–6 words).
 - Codes must be distinct (no near-duplicates).
 - Each code must name a specific aspect AND its quality or direction — not just a neutral topic.
   Good: "laggy multiplayer matchmaking", "intuitive inventory controls", "frustrating difficulty spike"
   Bad: "matchmaking", "controls", "difficulty"
 - Codes must be grounded in the review text — do not invent concepts not present.
-- For short reviews under 50 words, produce at most 2 codes. Only add a third if the review clearly contains two distinct experiential concepts.
+- For short reviews under 50 words, produce at most 1 or 2 codes.
 {feedback_section}
 
 Output exactly as bullet points:

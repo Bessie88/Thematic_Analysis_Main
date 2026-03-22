@@ -10,7 +10,7 @@ MODEL_PATH="$AGENTS_ROOT/weights/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
 SERVER_LOG="$AGENTS_ROOT/server.log"
 PORT=8000
 
-RESEARCH_QUESTION="What factors shape player experience and satisfaction in video games?"
+RESEARCH_QUESTION="What do players dislike about the game?"
 
 # Stop SGLang reliably so GPU VRAM is freed before axial (embedding) and other steps.
 # Previously: ( cd ... && python ... ) &  made $! the subshell PID, so kill left the Python tree alive.
