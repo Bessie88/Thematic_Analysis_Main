@@ -133,12 +133,14 @@ B: "{node_b}"
 Research Question: {research_question}
 
 Classify the relationship between A and B as exactly one of:
-- "equivalent": A and B mean essentially the same thing (should be merged)
-- "subsumes": A is more general/abstract than B (A contains B)
-- "subsumed_by": A is more specific than B (B contains A)
-- "orthogonal": A and B are distinct concepts with no hierarchical relationship
+- "equivalent": A and B mean essentially the same thing and should be merged. They must be near-synonyms, not merely related.
+- "subsumes": A is a strict generalization of B — every instance of B is necessarily an instance of A. Sharing a topic or being in the same cluster is NOT sufficient.
+- "subsumed_by": B is a strict generalization of A — every instance of A is necessarily an instance of B.
+- "orthogonal": A and B are distinct concepts. DEFAULT TO THIS unless the relationship is unambiguous.
 
-Output ONLY valid JSON: {{"relation": "<one of the four>", "reason": "<brief explanation>"}}"""
+Important: two codes that share a topic but describe different aspects, qualities, or directions are orthogonal. When in doubt, choose orthogonal.
+
+Output ONLY valid JSON: {{"relation": "<one of the four>", "confidence": <integer 1-5>, "reason": "<brief explanation>"}}"""
 
 
 def research_report_prompt(research_question: str, graph_text: str) -> str:
