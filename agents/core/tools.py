@@ -37,6 +37,9 @@ from .utils import clean_and_parse_json, log_step, remove_think_tags
 # Refine step: only offer the K most similar cluster labels as MOVE targets (embedding cosine).
 REFINE_TOP_K_OTHER_CLUSTERS = 5
 
+# Hierarchy step: max pairs to send to LLM per cluster (sorted by similarity desc).
+MAX_PAIRS_PER_CLUSTER = 50
+
 # 2. LLM Setup (vLLM)
 # ==================================================
 # Set a conservative completion token budget to avoid exceeding model context.
@@ -78,6 +81,69 @@ def validate_open_codes(text: str, generated_codes: str, research_question: str)
     return llm.invoke(prompt).content
 
 
+def _deduplicate_codes(all_codes: List[str], model_name: str, near_dup_threshold: float = 0.95) -> tuple:
+    """
+    Deduplicate codes in two passes:
+    1. Exact dedup: normalize (lowercase, strip) and keep first occurrence.
+    2. Near-duplicate dedup: embed unique codes, merge pairs with cosine >= threshold via union-find.
+    Returns (deduped_codes, original_to_canonical_map).
+    """
+    # Pass 1: exact dedup (case-insensitive, stripped)
+    norm_to_canonical: Dict[str, str] = {}
+    for code in all_codes:
+        normed = code.strip().lower()
+        if normed not in norm_to_canonical:
+            norm_to_canonical[normed] = code.strip()
+    unique_codes = list(norm_to_canonical.values())
+
+    if len(unique_codes) < 2:
+        orig_map = {c: c.strip() for c in all_codes}
+        return unique_codes, orig_map
+
+    # Pass 2: near-duplicate dedup via embedding + union-find
+    model = SentenceTransformer(model_name)
+    embeddings = model.encode(unique_codes, batch_size=64, show_progress_bar=False, normalize_embeddings=True)
+    embeddings = np.asarray(embeddings, dtype=np.float32)
+    sim_matrix = embeddings @ embeddings.T
+
+    parent: Dict[int, int] = {i: i for i in range(len(unique_codes))}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for i in range(len(unique_codes)):
+        for j in range(i + 1, len(unique_codes)):
+            if sim_matrix[i][j] >= near_dup_threshold:
+                union(i, j)
+
+    # Build canonical mapping: each group maps to the first (canonical) member
+    root_to_canonical: Dict[int, str] = {}
+    for i in range(len(unique_codes)):
+        root = find(i)
+        if root not in root_to_canonical:
+            root_to_canonical[root] = unique_codes[root]
+
+    deduped = sorted(set(root_to_canonical.values()))
+
+    # Build original -> canonical map
+    idx_map = {unique_codes[i]: root_to_canonical[find(i)] for i in range(len(unique_codes))}
+    orig_map: Dict[str, str] = {}
+    for code in all_codes:
+        normed = code.strip().lower()
+        canonical_from_exact = norm_to_canonical.get(normed, code.strip())
+        orig_map[code] = idx_map.get(canonical_from_exact, canonical_from_exact)
+
+    return deduped, orig_map
+
+
 def _axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str = str(DATA_DIR)) -> str:
     """
     Step 2: Axial Coding (embed + K-means).
@@ -85,16 +151,29 @@ def _axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str
     Uses same logic as embed_and_cluster.py (LOGOS-style).
     """
     MINIBATCH_SIZE = 1000
-    K_MIN, K_MAX_DIVISOR = 2, 3
+    K_MIN, K_MAX_DIVISOR = 5, 3
 
     if not all_codes:
         return "No codes to cluster."
 
+    # Deduplicate codes before clustering
+    original_count = len(all_codes)
+    deduped_codes, dedup_map = _deduplicate_codes(all_codes, model_name)
+    log_step("DEDUP", f"Reduced {original_count} codes to {len(deduped_codes)} unique codes")
+
     model = SentenceTransformer(model_name)
-    embeddings = model.encode(all_codes, batch_size=64, show_progress_bar=True, normalize_embeddings=True)
+    embeddings = model.encode(deduped_codes, batch_size=64, show_progress_bar=True, normalize_embeddings=True)
     embeddings = np.asarray(embeddings, dtype=np.float32)
 
     n = len(embeddings)
+    if n < K_MIN:
+        # Not enough unique codes to cluster meaningfully
+        cluster_to_codes_out = {"0": deduped_codes}
+        out = {"all_codes": deduped_codes, "labels": [0] * n, "k": 1, "cluster_to_codes": cluster_to_codes_out, "dedup_map": dedup_map}
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, "gt_clustered_codes.json"), "w", encoding="utf-8") as f:
+            json.dump(out, f, indent=2)
+        return f"Axial coding: only {n} unique codes, placed in 1 cluster."
     use_minibatch = n >= 1000
     k_max = min(50, max(K_MIN + 1, n // K_MAX_DIVISOR))
     best_k, best_sil = K_MIN, -1.0
@@ -116,25 +195,32 @@ def _axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str
     labels = km.fit_predict(embeddings)
 
     cluster_to_codes = defaultdict(list)
-    for code, label in zip(all_codes, labels):
+    for code, label in zip(deduped_codes, labels):
         cluster_to_codes[int(label)].append(code)
 
     # Preserve codes_per_review from gt_codes_only.json so codebook_cleanup can compute datapoint frequency
+    # Map original codes to their canonical (deduped) forms
     codes_per_review = []
     codes_only_path = os.path.join(out_dir, "gt_codes_only.json")
     if os.path.isfile(codes_only_path):
         try:
             with open(codes_only_path, encoding="utf-8") as f:
                 codes_only_data = json.load(f)
-            codes_per_review = codes_only_data.get("codes_per_review", [])
+            raw_cpr = codes_only_data.get("codes_per_review", [])
+            # Remap codes_per_review to canonical forms
+            codes_per_review = [
+                list(dict.fromkeys(dedup_map.get(c, c) for c in review_codes))
+                for review_codes in raw_cpr
+            ]
         except (json.JSONDecodeError, OSError):
             pass
 
     out = {
-        "all_codes": all_codes,
+        "all_codes": deduped_codes,
         "labels": labels.tolist(),
         "k": best_k,
         "cluster_to_codes": {str(i): codes for i, codes in sorted(cluster_to_codes.items())},
+        "dedup_map": dedup_map,  # traceability: original -> canonical
     }
     if codes_per_review:
         out["codes_per_review"] = codes_per_review
@@ -478,6 +564,20 @@ def _build_hierarchy(edges: List[Dict[str, Any]], cluster_to_codes: Dict[str, Li
             if cp != cc:
                 directed.append({"parent": cp, "child": cc})
 
+        # Install the cluster representative as root parent: connect it to
+        # every top-level node (nodes with no incoming parent edge) instead of
+        # comparing it pairwise against every code (which created star hubs).
+        rep_canonical = find(rep)
+        children_set = {e["child"] for e in directed}
+        roots = [n for n in canonical if n != rep_canonical and n not in children_set]
+        for root_node in roots:
+            if root_node != rep_canonical:
+                directed.append({"parent": rep_canonical, "child": root_node})
+        # Ensure representative is in canonical_nodes
+        if rep_canonical not in canonical:
+            canonical.append(rep_canonical)
+            canonical.sort()
+
         hierarchy[cid] = {
             "merge_groups": merge_groups,
             "edges": directed,
@@ -539,7 +639,7 @@ def _infer_graph_per_cluster(
 @tool
 def global_graph_construction(
     research_question: str = "",
-    sim_threshold: float = 0.75,
+    sim_threshold: float = 0.85,
     skip_cross_cluster: bool = False,
     cross_cluster_top_k: int = 75,
 ) -> str:
@@ -702,6 +802,13 @@ def global_graph_construction(
                     raw = llm.invoke(prompt).content
                     parsed = clean_and_parse_json(raw)
                     relation = parsed.get("relation", "orthogonal")
+                    confidence = parsed.get("confidence", 3)
+                    if not isinstance(confidence, int):
+                        try:
+                            confidence = int(float(confidence))
+                        except (TypeError, ValueError):
+                            confidence = 3
+                    confidence = max(1, min(5, confidence))
                 except Exception as e:
                     log_step("CROSS_CLUSTER_LLM_ERROR", f"({node_a}, {node_b}): {e}")
                     continue
@@ -709,12 +816,13 @@ def global_graph_construction(
                 if relation not in ("equivalent", "subsumes", "subsumed_by", "orthogonal"):
                     relation = "orthogonal"
 
-                if relation != "orthogonal":
+                if relation != "orthogonal" and confidence >= 3:
                     rec = {
                         "node_a": node_a,
                         "node_b": node_b,
                         "relation": relation,
                         "similarity": round(sim, 4),
+                        "confidence": confidence,
                     }
                     cross_cluster_edges.append(rec)
                     if relation == "equivalent":
@@ -763,7 +871,7 @@ def global_graph_construction(
 
 
 @tool
-def hierarchy_construction(research_question: str = "", sim_threshold: float = 0.75) -> str:
+def hierarchy_construction(research_question: str = "", sim_threshold: float = 0.85) -> str:
     """
     Step 4 (LOGOS): Relationship classification + hierarchy edges.
     For each cluster: embed codes + representative on CPU, filter pairs by cosine
@@ -808,8 +916,11 @@ def hierarchy_construction(research_question: str = "", sim_threshold: float = 0
 
     for cid, codes in sorted(cluster_to_codes.items(), key=lambda x: int(x[0])):
         representative = codebook.get(cid, f"Cluster {cid}")
-        nodes = list(codes) + [representative]
-        nodes = list(dict.fromkeys(nodes))
+        # Do NOT include the representative in pairwise comparison — it's a
+        # high-level label that the LLM will say "subsumes" nearly everything,
+        # creating a star topology.  It is installed as root parent later in
+        # _build_hierarchy instead.
+        nodes = list(dict.fromkeys(codes))
 
         if len(nodes) < 2:
             continue
@@ -825,6 +936,10 @@ def hierarchy_construction(research_question: str = "", sim_threshold: float = 0
                 if sim_matrix[i][j] >= sim_threshold:
                     candidates.append((nodes[i], nodes[j], float(sim_matrix[i][j])))
 
+        # Cap pairs per cluster to avoid O(N²) LLM calls on large clusters
+        candidates.sort(key=lambda x: -x[2])
+        candidates = candidates[:MAX_PAIRS_PER_CLUSTER]
+
         for node_a, node_b, sim in candidates:
             if (cid, node_a, node_b) in done_pairs:
                 continue
@@ -836,6 +951,13 @@ def hierarchy_construction(research_question: str = "", sim_threshold: float = 0
                 parsed = clean_and_parse_json(raw)
                 relation = parsed.get("relation", "orthogonal")
                 reason = parsed.get("reason", "")
+                confidence = parsed.get("confidence", 3)
+                if not isinstance(confidence, int):
+                    try:
+                        confidence = int(float(confidence))
+                    except (TypeError, ValueError):
+                        confidence = 3
+                confidence = max(1, min(5, confidence))
             except Exception as e:
                 log_step("HIERARCHY_LLM_ERROR", f"Cluster {cid}, ({node_a}, {node_b}): {e}")
                 continue
@@ -843,13 +965,15 @@ def hierarchy_construction(research_question: str = "", sim_threshold: float = 0
             if relation not in ("equivalent", "subsumes", "subsumed_by", "orthogonal"):
                 relation = "orthogonal"
 
-            if relation != "orthogonal":
+            # Filter out low-confidence edges — only keep edges the LLM is reasonably sure about
+            if relation != "orthogonal" and confidence >= 3:
                 edge = {
                     "cluster_id": cid,
                     "node_a": node_a,
                     "node_b": node_b,
                     "relation": relation,
                     "similarity": round(sim, 4),
+                    "confidence": confidence,
                     "reason": reason,
                 }
                 all_edges.append(edge)
