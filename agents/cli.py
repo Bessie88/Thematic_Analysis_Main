@@ -64,7 +64,7 @@ def main() -> None:
         help="Cosine similarity threshold for embedding pre-filter: hierarchy pair filtering and global-graph cross-cluster linking (default 0.75).",
     )
     p.add_argument("--research-question", required=True, help="Research question that conditions the entire GT pipeline.")
-    p.add_argument("--data", default=str(DEFAULT_DATA_CSV), help="CSV with review_text column.")
+    p.add_argument("--data", default=str(DEFAULT_DATA_CSV), help="CSV with text_review column.")
     args = p.parse_args()
 
     ensure_output_dirs()
@@ -160,8 +160,8 @@ def main() -> None:
         log_step("AXIAL_COMPLETE", axial_mapping[:500] + "..." if len(axial_mapping) > 500 else axial_mapping)
         raise SystemExit(0)
 
-    review_text_df = pd.read_csv(args.data)
-    reviews = review_text_df["review_text"].astype(str).tolist()
+    text_df = pd.read_csv(args.data)
+    reviews = text_df["text_review"].astype(str).tolist()
     all_open_codes = []
 
     for idx, review in enumerate(reviews, start=1):

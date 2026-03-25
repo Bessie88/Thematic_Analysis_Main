@@ -7,7 +7,9 @@ DATA_DIR = OUTPUTS_DIR / "data"
 LOGS_DIR = OUTPUTS_DIR / "logs"
 WEIGHTS_DIR = AGENTS_DIR / "weights"
 OLD_SLURM_DIR = AGENTS_DIR / "old_slurm.out"
-DEFAULT_DATA_CSV = AGENTS_DIR.parent / "data" / "review_text_english_50k.csv"
+DEFAULT_DATA_CSV = AGENTS_DIR.parent / "data" / "reddit_comment_text_1000.csv"
+
+# DEFAULT_DATA_CSV = AGENTS_DIR.parent / "data" / "review_text_english_50k.csv"
 
 GT_CODES_ONLY_PATH = DATA_DIR / "gt_codes_only.json"
 CLUSTERED_CODES_PATH = DATA_DIR / "gt_clustered_codes.json"
