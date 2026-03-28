@@ -7,12 +7,12 @@ from langgraph.graph import END
 from .paths import CLUSTERED_CODES_PATH, CODEBOOK_PATH
 from .tools import (
     axial_coding,
-    global_graph_construction,
-    graph_construction,
     hierarchy_construction,
     high_level_code_generation,
+    meta_theme_grouping,
     open_coding,
     refine_cluster_assignments,
+    tree_assembly,
     validate_open_codes,
 )
 from .utils import log_step, remove_think_tags
@@ -28,8 +28,8 @@ TOOLS = {
     "high_level_code_generation": high_level_code_generation,
     "refine_cluster_assignments": refine_cluster_assignments,
     "hierarchy_construction": hierarchy_construction,
-    "graph_construction": graph_construction,
-    "global_graph_construction": global_graph_construction,
+    "meta_theme_grouping": meta_theme_grouping,
+    "tree_assembly": tree_assembly,
 }
 
 
@@ -45,12 +45,12 @@ class GTState(TypedDict, total=False):
     _open_coding_retries: int
     # Axial phase: codes -> clusters
     all_codes_for_axial: Optional[List[str]]
-    axial_mapping: Optional[str]  # cluster summary text, or "done"|"refine"|"hierarchy"|"graph"|"global_graph"
+    axial_mapping: Optional[str]  # cluster summary text, or "done"|"refine"|"hierarchy"|"meta_themes"|"tree"
     _cluster_refinement_done: Optional[bool]
     # Downstream outputs
     codebook: Optional[Dict[str, str]]
     hierarchy: Optional[str]
-    graph: Optional[str]
+    meta_themes: Optional[str]
     global_graph: Optional[str]
     # Control
     tool_call: Optional[Dict[str, Any]]  # {"tool": name, "args": {...}}; agent sets, tool_node clears
@@ -123,35 +123,27 @@ def agent_node(state: GTState):
             },
             "step": step,
         }
-    # --- After axial: high-level labels (sentinel "done"), then hierarchy, graph, global_graph ---
+    # --- After axial: high-level labels (sentinel "done"), then hierarchy, meta_themes, tree ---
     if state.get("axial_mapping") == "done" and not state.get("codebook"):
         return {
             "tool_call": {"tool": "high_level_code_generation", "args": {"cluster_file": str(CLUSTERED_CODES_PATH), "research_question": rq}},
             "step": step,
         }
     if state.get("axial_mapping") == "hierarchy" and not state.get("hierarchy"):
-        sim_threshold = state.get("_sim_threshold", 0.85)
         return {
-            "tool_call": {"tool": "hierarchy_construction", "args": {"research_question": rq, "sim_threshold": sim_threshold}},
+            "tool_call": {"tool": "hierarchy_construction", "args": {"research_question": rq}},
             "step": step,
         }
-    if state.get("axial_mapping") == "graph" and not state.get("graph"):
+    if state.get("axial_mapping") == "meta_themes" and not state.get("meta_themes"):
         return {
-            "tool_call": {"tool": "graph_construction", "args": {}},
+            "tool_call": {"tool": "meta_theme_grouping", "args": {"research_question": rq}},
             "step": step,
         }
-    if state.get("axial_mapping") == "global_graph" and not state.get("global_graph"):
-        sim_threshold = state.get("_sim_threshold", 0.85)
-        skip_cross = state.get("_skip_cross_cluster", False)
+    if state.get("axial_mapping") == "tree" and not state.get("global_graph"):
         return {
             "tool_call": {
-                "tool": "global_graph_construction",
-                "args": {
-                    "research_question": rq,
-                    "sim_threshold": sim_threshold,
-                    "skip_cross_cluster": skip_cross,
-                    "cross_cluster_top_k": 75,
-                },
+                "tool": "tree_assembly",
+                "args": {"research_question": rq},
             },
             "step": step,
         }
@@ -184,7 +176,7 @@ def router(state: GTState):
             return "agent"  # agent will schedule open_coding retry
         return END
     # Axial phase (long text): axial done, no validation step
-    if state.get("axial_mapping") and state.get("axial_mapping") not in ("done", "refine", "hierarchy", "graph", "global_graph"):
+    if state.get("axial_mapping") and state.get("axial_mapping") not in ("done", "refine", "hierarchy", "meta_themes", "tree"):
         return END
     # Refine phase: run high_level then refine_cluster_assignments, then END
     if state.get("axial_mapping") == "refine":
@@ -201,11 +193,11 @@ def router(state: GTState):
         return "agent"
     if state.get("hierarchy"):
         return END
-    if state.get("axial_mapping") == "graph" and not state.get("graph"):
+    if state.get("axial_mapping") == "meta_themes" and not state.get("meta_themes"):
         return "agent"
-    if state.get("graph"):
+    if state.get("meta_themes"):
         return END
-    if state.get("axial_mapping") == "global_graph" and not state.get("global_graph"):
+    if state.get("axial_mapping") == "tree" and not state.get("global_graph"):
         return "agent"
     if state.get("global_graph"):
         return END
@@ -241,8 +233,8 @@ def tool_node(state: GTState):
         updates["_cluster_refinement_done"] = True
     elif tool_name == "hierarchy_construction":
         updates["hierarchy"] = clean_output
-    elif tool_name == "graph_construction":
-        updates["graph"] = clean_output
-    elif tool_name == "global_graph_construction":
+    elif tool_name == "meta_theme_grouping":
+        updates["meta_themes"] = clean_output
+    elif tool_name == "tree_assembly":
         updates["global_graph"] = clean_output
     return updates

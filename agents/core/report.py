@@ -35,15 +35,59 @@ def _default_model_name() -> str:
     return os.environ.get("REPORT_MODEL_NAME", _DEFAULT_MODEL)
 
 
+def _render_tree_node(node: Dict[str, Any], indent: int = 0) -> str:
+    """Recursively render a tree node into indented text for the LLM."""
+    prefix = "  " * indent
+    name = node.get("name", "Unnamed")
+    node_type = node.get("type", "")
+    children = node.get("children", [])
+
+    if node_type == "code":
+        return f"{prefix}* {name}\n"
+
+    # For non-leaf nodes, show name and type
+    type_label = f" [{node_type}]" if node_type and node_type != "root" else ""
+    child_count = _count_leaves(node)
+    count_label = f" ({child_count} codes)" if children and node_type != "code" else ""
+    line = f"{prefix}- {name}{type_label}{count_label}\n"
+
+    for child in children:
+        line += _render_tree_node(child, indent + 1)
+    return line
+
+
+def _count_leaves(node: Dict[str, Any]) -> int:
+    """Count leaf (code) nodes under a tree node."""
+    children = node.get("children", [])
+    if not children:
+        return 1 if node.get("type") == "code" else 0
+    return sum(_count_leaves(c) for c in children)
+
+
 def build_graph_text_for_llm(graph_path: Path, max_chars: int) -> str:
     """
     Load gt_global_graph.json and build a compact text block for the LLM.
-    Prefers keeping all nodes; drops edges from the end, then nodes, then hard-truncates if needed.
+    Supports both the new tree format and the legacy flat edge-list format.
     """
     with open(graph_path, encoding="utf-8") as f:
         data: Dict[str, Any] = json.load(f)
 
-    nodes: List[str] = list(data.get("canonical_nodes") or [])
+    # New tree format
+    if "tree" in data:
+        tree = data["tree"]
+        nodes: List[str] = list(data.get("canonical_nodes") or [])
+        edges = data.get("edges") or []
+
+        header = f"Thematic hierarchy: {len(nodes)} nodes, {len(edges)} edges (strict tree)\n\n"
+        header += "THEME HIERARCHY:\n"
+        tree_text = header + _render_tree_node(tree)
+
+        if len(tree_text) > max_chars:
+            tree_text = tree_text[: max_chars - 80] + "\n...[hierarchy truncated to char limit]\n"
+        return tree_text
+
+    # Legacy flat format (backward compat)
+    nodes = list(data.get("canonical_nodes") or [])
     raw_edges = data.get("edges") or []
     e_list: List[Dict[str, Any]] = [e for e in raw_edges if isinstance(e, dict)]
 

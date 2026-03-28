@@ -143,6 +143,62 @@ Important: two codes that share a topic but describe different aspects, qualitie
 Output ONLY valid JSON: {{"relation": "<one of the four>", "confidence": <integer 1-5>, "reason": "<brief explanation>"}}"""
 
 
+def meta_theme_grouping_prompt(labels_json: str, research_question: str) -> str:
+    """Prompt to group cluster labels into 4-5 broad meta-themes."""
+    rq_line = ""
+    if research_question:
+        rq_line = f"\nResearch Question: {research_question}\nGroup with the research question in mind.\n"
+    return f"""You are organising the results of a thematic analysis into a high-level hierarchy.
+
+Below is a JSON object mapping cluster IDs to their labels:
+
+{labels_json}
+{rq_line}
+Your task: group ALL of these clusters into exactly 4 or 5 broad meta-themes.
+
+Rules:
+- Every cluster ID must appear in exactly one group — do not drop any.
+- Each meta-theme name should be 2–6 words and broader/more abstract than any individual cluster label.
+- Aim for roughly balanced groups (avoid putting most clusters in one group).
+- If two cluster labels are near-synonyms, place them in the same group.
+
+Output ONLY valid JSON in this exact format:
+{{"meta_themes": [
+  {{"name": "Meta-Theme Name", "cluster_ids": ["0", "3", "7"]}},
+  {{"name": "Another Meta-Theme", "cluster_ids": ["1", "4"]}},
+  ...
+]}}"""
+
+
+def intra_cluster_subtheme_prompt(
+    cluster_label: str, codes_list: str, research_question: str
+) -> str:
+    """Prompt to organise codes within a cluster into 2-5 sub-themes."""
+    rq_line = ""
+    if research_question:
+        rq_line = f"\nResearch Question: {research_question}\n"
+    return f"""You are building a thematic hierarchy. The cluster below is labelled:
+"{cluster_label}"
+{rq_line}
+It contains these codes (one per line):
+{codes_list}
+
+Your task: organise these codes into 2–5 sub-themes that are more specific than the cluster label.
+
+Rules:
+- Every code from the list above MUST appear in exactly one sub-theme OR in "ungrouped_codes".
+- Sub-theme names should be 2–5 words, more specific than "{cluster_label}".
+- Codes that do not clearly fit any sub-theme go in "ungrouped_codes".
+- Do NOT invent codes that are not in the list above.
+- Do NOT rename or alter any code — use the exact strings provided.
+
+Output ONLY valid JSON:
+{{"sub_themes": [
+  {{"name": "Sub-Theme Name", "codes": ["code a", "code b"]}},
+  {{"name": "Another Sub-Theme", "codes": ["code c"]}}
+], "ungrouped_codes": ["code d"]}}"""
+
+
 def research_report_prompt(research_question: str, graph_text: str) -> str:
     """Prompt for final qualitative synthesis from the global thematic graph (markdown output)."""
     return f"""You are a qualitative researcher writing a short synthesis for a grounded-theory style analysis.
