@@ -9,7 +9,7 @@ export PYTHONPATH="$REPO_ROOT"
 MODEL_PATH="$AGENTS_ROOT/weights/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
 SERVER_LOG="$AGENTS_ROOT/server.log"
 PORT=8000
-RESEARCH_QUESTION = "How do commenters frame the severity of climate change and the possibility or impossibility of meaningful response
+RESEARCH_QUESTION="How do commenters frame the severity of climate change and the possibility or impossibility of meaningful response?"
 # RESEARCH_QUESTION="What do players dislike about the game?"
 
 # Stop SGLang reliably so GPU VRAM is freed before axial (embedding) and other steps.
