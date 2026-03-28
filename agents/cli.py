@@ -8,9 +8,9 @@ from agents.core.paths import (
     CODEBOOK_PATH,
     DEFAULT_DATA_CSV,
     GLOBAL_GRAPH_PATH,
-    GRAPH_PATH,
     GT_CODES_ONLY_PATH,
     HIERARCHY_PATH,
+    META_THEMES_PATH,
     OPEN_CODES_MARKDOWN_PATH,
     RESEARCH_REPORT_PATH,
     display_path,
@@ -36,7 +36,7 @@ def _base_state(research_question: str) -> dict:
         "_cluster_refinement_done": False,
         "codebook": None,
         "hierarchy": None,
-        "graph": None,
+        "meta_themes": None,
         "global_graph": None,
         "tool_call": None,
         "step": 0,
@@ -49,19 +49,20 @@ def main() -> None:
     p.add_argument("--axial-only", action="store_true", help="Load gt_codes_only.json and run only the axial step in the graph.")
     p.add_argument("--high-level-only", action="store_true", help="Load gt_clustered_codes.json and run high-level code generation (LLM must be up).")
     p.add_argument("--refine-only", action="store_true", help="Run high-level (if needed) then refine_cluster_assignments. Requires codebook.json and gt_clustered_codes.json. LLM must be up.")
-    p.add_argument("--hierarchy-only", action="store_true", help="Run hierarchy construction (relationship classification + edges). LLM must be up.")
-    p.add_argument("--graph-only", action="store_true", help="Run graph construction (transitivity inference). No LLM needed.")
-    p.add_argument("--global-graph-only", action="store_true", help="Run global graph construction (merge clusters, optional cross-cluster linking). LLM needed unless --skip-cross-cluster.")
+    p.add_argument("--hierarchy-only", action="store_true", help="Run hierarchy construction (intra-cluster sub-theme grouping). LLM must be up.")
+    p.add_argument("--meta-themes-only", action="store_true", help="Run meta-theme grouping (group cluster labels into 4-5 meta-themes). LLM must be up.")
+    p.add_argument("--tree-only", action="store_true", help="Run tree assembly (build hierarchical tree from meta-themes + hierarchy). No LLM needed.")
+    p.add_argument("--global-graph-only", action="store_true", help="Alias for --tree-only (backward compat).")
     p.add_argument("--report-only", action="store_true", help="Generate research_report.md from gt_global_graph.json (Mistral/SGLang report server must be up).")
     p.add_argument("--graph-path", default=None, help="Path to global graph JSON for --report-only (default: outputs/data/gt_global_graph.json).")
     p.add_argument("--report-api-base", default=None, help="OpenAI-compatible API base for report (default: env REPORT_OPENAI_BASE or http://localhost:8000/v1).")
     p.add_argument("--report-model", default=None, help="Model name for report (default: env REPORT_MODEL_NAME or llm).")
-    p.add_argument("--skip-cross-cluster", action="store_true", help="Skip cross-cluster linking in global graph (LLM-free).")
+    p.add_argument("--skip-cross-cluster", action="store_true", help="(Deprecated, ignored) Cross-cluster linking removed in tree mode.")
     p.add_argument(
         "--sim-threshold",
         type=float,
         default=0.75,
-        help="Cosine similarity threshold for embedding pre-filter: hierarchy pair filtering and global-graph cross-cluster linking (default 0.75).",
+        help="(Deprecated, ignored) Cosine similarity threshold no longer used in tree mode.",
     )
     p.add_argument("--research-question", required=True, help="Research question that conditions the entire GT pipeline.")
     p.add_argument("--data", default=str(DEFAULT_DATA_CSV), help="CSV with text_review column.")
@@ -99,35 +100,43 @@ def main() -> None:
         log_step("REFINE_COMPLETE", "Cluster refinement finished." if summary else "Refine step completed.")
         raise SystemExit(0)
 
-    if args.graph_only:
+    if args.hierarchy_only:
+        if not CODEBOOK_PATH.is_file():
+            print(f"Error: {display_path(CODEBOOK_PATH)} not found. Run high-level step first.")
+            raise SystemExit(1)
+        state = _base_state(rq)
+        state["axial_mapping"] = "hierarchy"
+        final_hier = app.invoke(state, config={"recursion_limit": 25})
+        log_step("HIERARCHY_COMPLETE", final_hier.get("hierarchy", ""))
+        raise SystemExit(0)
+
+    if args.meta_themes_only:
+        if not CODEBOOK_PATH.is_file():
+            print(f"Error: {display_path(CODEBOOK_PATH)} not found. Run high-level step first.")
+            raise SystemExit(1)
+        state = _base_state(rq)
+        state["axial_mapping"] = "meta_themes"
+        final_mt = app.invoke(state, config={"recursion_limit": 25})
+        log_step("META_THEMES_COMPLETE", final_mt.get("meta_themes", ""))
+        raise SystemExit(0)
+
+    if args.tree_only or args.global_graph_only:
+        if not META_THEMES_PATH.is_file():
+            print(f"Error: {display_path(META_THEMES_PATH)} not found. Run meta-themes step first.")
+            raise SystemExit(1)
         if not HIERARCHY_PATH.is_file():
             print(f"Error: {display_path(HIERARCHY_PATH)} not found. Run hierarchy step first.")
             raise SystemExit(1)
         state = _base_state(rq)
-        state["axial_mapping"] = "graph"
-        final_graph = app.invoke(state, config={"recursion_limit": 25})
-        log_step("GRAPH_COMPLETE", final_graph.get("graph", ""))
-        raise SystemExit(0)
-
-    if args.global_graph_only:
-        if not GRAPH_PATH.is_file():
-            print(f"Error: {display_path(GRAPH_PATH)} not found. Run graph step first.")
-            raise SystemExit(1)
-        if not args.skip_cross_cluster and not CODEBOOK_PATH.is_file():
-            print(f"Error: {display_path(CODEBOOK_PATH)} not found. Run high-level step first (or use --skip-cross-cluster).")
-            raise SystemExit(1)
-        state = _base_state(rq)
-        state["axial_mapping"] = "global_graph"
-        state["_sim_threshold"] = args.sim_threshold
-        state["_skip_cross_cluster"] = args.skip_cross_cluster
-        final_global = app.invoke(state, config={"recursion_limit": 25})
-        log_step("GLOBAL_GRAPH_COMPLETE", final_global.get("global_graph", ""))
+        state["axial_mapping"] = "tree"
+        final_tree = app.invoke(state, config={"recursion_limit": 25})
+        log_step("TREE_COMPLETE", final_tree.get("global_graph", ""))
         raise SystemExit(0)
 
     if args.report_only:
         graph_file = Path(args.graph_path) if args.graph_path else GLOBAL_GRAPH_PATH
         if not graph_file.is_file():
-            print(f"Error: {graph_file} not found. Run global graph step first (or pass --graph-path).")
+            print(f"Error: {graph_file} not found. Run tree assembly step first (or pass --graph-path).")
             raise SystemExit(1)
         generate_research_report(
             rq,
@@ -137,17 +146,6 @@ def main() -> None:
             model=args.report_model,
         )
         log_step("RESEARCH_REPORT_COMPLETE", f"Wrote {display_path(RESEARCH_REPORT_PATH)}")
-        raise SystemExit(0)
-
-    if args.hierarchy_only:
-        if not CODEBOOK_PATH.is_file():
-            print(f"Error: {display_path(CODEBOOK_PATH)} not found. Run high-level step first.")
-            raise SystemExit(1)
-        state = _base_state(rq)
-        state["axial_mapping"] = "hierarchy"
-        state["_sim_threshold"] = args.sim_threshold
-        final_hier = app.invoke(state, config={"recursion_limit": 25})
-        log_step("HIERARCHY_COMPLETE", final_hier.get("hierarchy", ""))
         raise SystemExit(0)
 
     if args.axial_only:

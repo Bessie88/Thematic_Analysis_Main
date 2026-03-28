@@ -2,7 +2,7 @@
 import json
 import os
 import re
-from collections import Counter, defaultdict, deque
+from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
@@ -17,17 +17,16 @@ from .prompts import (
     validate_open_codes_prompt,
     high_level_code_generation_prompt,
     refine_cluster_assignments_prompt,
-    relationship_classification_prompt,
+    meta_theme_grouping_prompt,
+    intra_cluster_subtheme_prompt,
 )
 from .paths import (
     CLUSTERED_CODES_PATH,
     CODEBOOK_PATH,
-    CROSS_CLUSTER_EDGES_PATH,
     DATA_DIR,
     GLOBAL_GRAPH_PATH,
-    GRAPH_PATH,
-    HIERARCHY_EDGES_PATH,
     HIERARCHY_PATH,
+    META_THEMES_PATH,
     WEIGHTS_DIR,
     display_path,
     ensure_output_dirs,
@@ -37,8 +36,6 @@ from .utils import clean_and_parse_json, log_step, remove_think_tags
 # Refine step: only offer the K most similar cluster labels as MOVE targets (embedding cosine).
 REFINE_TOP_K_OTHER_CLUSTERS = 5
 
-# Hierarchy step: max pairs to send to LLM per cluster (sorted by similarity desc).
-MAX_PAIRS_PER_CLUSTER = 50
 
 # 2. LLM Setup (vLLM)
 # ==================================================
@@ -527,368 +524,63 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
     return f"Refined cluster assignments: {len(moves_applied)} codes moved across clusters."
 
 
-def _build_hierarchy(edges: List[Dict[str, Any]], cluster_to_codes: Dict[str, List[str]], codebook: Dict[str, str]) -> Dict[str, Any]:
-    """Build per-cluster hierarchy from classified edges: apply merges (union-find), then directed edges."""
-    parent_map: Dict[str, str] = {}
-
-    def find(x: str) -> str:
-        while parent_map.get(x, x) != x:
-            parent_map[x] = parent_map.get(parent_map[x], parent_map[x])
-            x = parent_map[x]
-        return x
-
-    def union(a: str, b: str):
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent_map[rb] = ra
-
-    cluster_edges: Dict[str, List[Dict]] = defaultdict(list)
-    cluster_merges: Dict[str, List[tuple]] = defaultdict(list)
-
-    for e in edges:
-        cid = str(e["cluster_id"])
-        if e["relation"] == "equivalent":
-            cluster_merges[cid].append((e["node_a"], e["node_b"]))
-            union(e["node_a"], e["node_b"])
-        elif e["relation"] == "subsumes":
-            cluster_edges[cid].append({"parent": e["node_a"], "child": e["node_b"]})
-        elif e["relation"] == "subsumed_by":
-            cluster_edges[cid].append({"parent": e["node_b"], "child": e["node_a"]})
-
-    hierarchy = {}
-    all_cids = set(cluster_to_codes.keys()) | set(cluster_edges.keys()) | set(cluster_merges.keys())
-    for cid in sorted(all_cids, key=lambda x: int(x)):
-        codes = cluster_to_codes.get(cid, [])
-        rep = codebook.get(cid, f"Cluster {cid}")
-        all_nodes = list(set(codes + [rep]))
-
-        merge_groups_map: Dict[str, List[str]] = defaultdict(list)
-        for n in all_nodes:
-            merge_groups_map[find(n)].append(n)
-        merge_groups = [g for g in merge_groups_map.values() if len(g) > 1]
-
-        canonical = sorted(set(find(n) for n in all_nodes))
-
-        directed = []
-        for edge in cluster_edges.get(cid, []):
-            cp = find(edge["parent"])
-            cc = find(edge["child"])
-            if cp != cc:
-                directed.append({"parent": cp, "child": cc})
-
-        # Install the cluster representative as root parent: connect it to
-        # every top-level node (nodes with no incoming parent edge) instead of
-        # comparing it pairwise against every code (which created star hubs).
-        rep_canonical = find(rep)
-        children_set = {e["child"] for e in directed}
-        roots = [n for n in canonical if n != rep_canonical and n not in children_set]
-        for root_node in roots:
-            if root_node != rep_canonical:
-                directed.append({"parent": rep_canonical, "child": root_node})
-        # Ensure representative is in canonical_nodes
-        if rep_canonical not in canonical:
-            canonical.append(rep_canonical)
-            canonical.sort()
-
-        hierarchy[cid] = {
-            "merge_groups": merge_groups,
-            "edges": directed,
-            "canonical_nodes": canonical,
-        }
-    return hierarchy
-
-
-def _infer_graph_per_cluster(
-    merge_groups: List[List[str]],
-    edges: List[Dict[str, Any]],
-    canonical_nodes: List[str],
-) -> tuple:
-    """
-    Apply BFS transitivity: A→B and B→C ⇒ infer A→C.
-    Deduction-first conflict: do not add A→C if C→A exists or A,C in same equiv class.
-    Returns (final_edges_list, inferred_edges_list).
-    """
-    equiv_rep: Dict[str, str] = {}
-    for group in merge_groups:
-        rep = group[0]
-        for n in group:
-            equiv_rep[n] = rep
-    for n in canonical_nodes:
-        if n not in equiv_rep:
-            equiv_rep[n] = n
-
-    def same_equiv(a: str, b: str) -> bool:
-        return equiv_rep.get(a, a) == equiv_rep.get(b, b)
-
-    out_edges: Dict[str, set] = defaultdict(set)
-    edge_set: set = set()
-    for e in edges:
-        u, v = e["parent"], e["child"]
-        out_edges[u].add(v)
-        edge_set.add((u, v))
-
-    initial_edges = set(edge_set)
-    queue: deque = deque(edge_set)
-
-    while queue:
-        a, b = queue.popleft()
-        for c in list(out_edges[b]):
-            if (a, c) in edge_set:
-                continue
-            if (c, a) in edge_set:
-                continue
-            if same_equiv(a, c):
-                continue
-            edge_set.add((a, c))
-            out_edges[a].add(c)
-            queue.append((a, c))
-
-    final_edges = [{"parent": u, "child": v} for u, v in sorted(edge_set)]
-    inferred_edges = [{"parent": u, "child": v} for u, v in sorted(edge_set - initial_edges)]
-    return final_edges, inferred_edges
-
-
 @tool
-def global_graph_construction(
-    research_question: str = "",
-    sim_threshold: float = 0.85,
-    skip_cross_cluster: bool = False,
-    cross_cluster_top_k: int = 75,
-) -> str:
+def meta_theme_grouping(research_question: str = "") -> str:
     """
-    Step 6 (LOGOS): Global graph construction.
-    Merge all per-cluster nodes and edges, optionally add cross-cluster links via LLM,
-    write gt_global_graph.json with direct edges only (no global transitive closure).
+    Step 5a (LOGOS): Group cluster labels into 4-5 broad meta-themes.
+    Reads codebook.json, asks LLM to group all cluster labels, writes gt_meta_themes.json.
     """
-    graph_path = str(GRAPH_PATH)
     codebook_path = str(CODEBOOK_PATH)
-    if not os.path.isfile(graph_path):
-        return json.dumps({"error": "Missing gt_graph.json; run graph step first."})
-    with open(graph_path, encoding="utf-8") as f:
-        per_cluster = json.load(f)
-    codebook: Dict[str, str] = {}
-    cluster_to_codes: Dict[str, List[str]] = {}
-    if not skip_cross_cluster:
-        if not os.path.isfile(codebook_path):
-            return json.dumps({"error": "Missing codebook.json; needed for cross-cluster linking."})
-        with open(codebook_path, encoding="utf-8") as f:
-            cb_data = json.load(f)
-        codebook = cb_data.get("codebook", {})
-        cluster_to_codes = cb_data.get("cluster_to_codes", {})
+    if not os.path.isfile(codebook_path):
+        return json.dumps({"error": "Missing codebook.json; run high-level step first."})
+    with open(codebook_path, encoding="utf-8") as f:
+        cb_data = json.load(f)
+    codebook = cb_data.get("codebook", {})
+    if not codebook:
+        return json.dumps({"error": "No codebook in codebook.json."})
 
-    # 1. Global union-find: merge equivalent nodes (same string + per-cluster merge_groups)
-    parent_map: Dict[str, str] = {}
+    # Build the labels JSON for the prompt: {"0": "label", "1": "label", ...}
+    labels_json = json.dumps(codebook, indent=2)
+    all_cids = set(codebook.keys())
 
-    def find(x: str) -> str:
-        while parent_map.get(x, x) != x:
-            parent_map[x] = parent_map.get(parent_map[x], parent_map[x])
-            x = parent_map[x]
-        return x
+    prompt = meta_theme_grouping_prompt(labels_json, research_question)
+    try:
+        raw = llm.invoke(prompt).content
+        parsed = clean_and_parse_json(raw)
+    except Exception as e:
+        log_step("META_THEME_LLM_ERROR", str(e))
+        return json.dumps({"error": f"LLM call failed: {e}"})
 
-    def union(a: str, b: str):
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent_map[rb] = ra
+    meta_themes = parsed.get("meta_themes", [])
+    if not isinstance(meta_themes, list) or len(meta_themes) < 2:
+        return json.dumps({"error": "LLM returned invalid meta_themes structure."})
 
-    # Collect all node strings
-    all_node_strings: set = set()
-    for cid, entry in per_cluster.items():
-        for n in entry.get("canonical_nodes", []):
-            all_node_strings.add(n)
-        for g in entry.get("merge_groups", []):
-            for n in g:
-                all_node_strings.add(n)
-        for e in entry.get("edges", []):
-            all_node_strings.add(e["parent"])
-            all_node_strings.add(e["child"])
+    # Validate: all cluster IDs accounted for
+    assigned_cids: set = set()
+    for mt in meta_themes:
+        for cid in mt.get("cluster_ids", []):
+            assigned_cids.add(str(cid))
 
-    for n in all_node_strings:
-        if n not in parent_map:
-            parent_map[n] = n
+    missing = all_cids - assigned_cids
+    if missing:
+        # Put missing clusters into the largest group
+        largest = max(meta_themes, key=lambda m: len(m.get("cluster_ids", [])))
+        for cid in missing:
+            largest["cluster_ids"].append(str(cid))
+        log_step("META_THEME_FIXUP", f"Added {len(missing)} missing cluster(s) to group '{largest['name']}'")
 
-    # Apply per-cluster merge_groups
-    for entry in per_cluster.values():
-        for group in entry.get("merge_groups", []):
-            if len(group) < 2:
-                continue
-            rep = group[0]
-            for n in group[1:]:
-                union(rep, n)
-
-    # 2. Collect and canonicalize edges (adjacency sets, no NxN matrix)
-    edge_set: set = set()
-    for entry in per_cluster.values():
-        for e in entry.get("edges", []):
-            u, v = find(e["parent"]), find(e["child"])
-            if u != v:
-                edge_set.add((u, v))
-
-    # 3. Optional cross-cluster linking
-    cross_cluster_edges: List[Dict[str, Any]] = []
-    existing_cross_count = 0
-    if not skip_cross_cluster:
-        model_name = os.environ.get("GT_EMBED_MODEL") or (
-            str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B") if os.path.isdir(str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B")) else "Qwen/Qwen3-Embedding-0.6B"
-        )
-        if os.path.isdir(model_name):
-            model_name = os.path.abspath(model_name)
-
-        embed_model = SentenceTransformer(model_name, device="cpu")
-
-        # Embed cluster reps + top-3 codes per cluster; track cluster_id for cross-cluster filter
-        labeled: List[tuple] = []  # (label, cluster_id)
-        for cid in sorted(codebook.keys(), key=int):
-            rep = codebook.get(cid, f"Cluster {cid}")
-            labeled.append((rep, cid))
-        for cid in sorted(cluster_to_codes.keys(), key=int):
-            codes = cluster_to_codes.get(cid, [])
-            freq = Counter(codes)
-            for c, _ in freq.most_common(3):
-                labeled.append((c, cid))
-        # Dedup by label, keep first cluster (for embedding we just need unique labels)
-        seen_label: set = set()
-        candidates: List[str] = []
-        label_to_cid: Dict[str, str] = {}
-        for label, cid in labeled:
-            if label not in seen_label:
-                seen_label.add(label)
-                candidates.append(label)
-                label_to_cid[label] = cid
-            elif label not in label_to_cid:
-                label_to_cid[label] = cid
-        for c in candidates:
-            if c not in parent_map:
-                parent_map[c] = c
-                all_node_strings.add(c)
-
-        if len(candidates) >= 2:
-            embeddings = embed_model.encode(candidates, normalize_embeddings=True)
-            embeddings = np.asarray(embeddings, dtype=np.float32)
-            sim_matrix = embeddings @ embeddings.T
-            n = len(candidates)
-            pairs: List[tuple] = []
-            for i in range(n):
-                for j in range(n):
-                    if i >= j:
-                        continue
-                    ci, cj = candidates[i], candidates[j]
-                    if ci == cj:
-                        continue
-                    # Only cross-cluster pairs
-                    cid_i = label_to_cid.get(ci, "")
-                    cid_j = label_to_cid.get(cj, "")
-                    if cid_i == cid_j:
-                        continue
-                    pairs.append((ci, cj, float(sim_matrix[i, j])))
-            pairs.sort(key=lambda x: -x[2])
-            top_pairs = pairs[:cross_cluster_top_k]
-
-            cross_path = str(CROSS_CLUSTER_EDGES_PATH)
-            done_pairs: set = set()
-            existing: List[Dict] = []
-            if os.path.isfile(cross_path):
-                with open(cross_path, encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            e = json.loads(line)
-                            existing.append(e)
-                            done_pairs.add((e["node_a"], e["node_b"]))
-                            done_pairs.add((e["node_b"], e["node_a"]))
-                        except (json.JSONDecodeError, KeyError):
-                            pass
-            cross_cluster_edges = list(existing)
-            existing_cross_count = len(existing)
-
-            for node_a, node_b, sim in top_pairs:
-                if (node_a, node_b) in done_pairs or (node_b, node_a) in done_pairs:
-                    continue
-                if sim < sim_threshold:
-                    continue
-
-                prompt = relationship_classification_prompt(node_a, node_b, research_question)
-
-                try:
-                    raw = llm.invoke(prompt).content
-                    parsed = clean_and_parse_json(raw)
-                    relation = parsed.get("relation", "orthogonal")
-                    confidence = parsed.get("confidence", 3)
-                    if not isinstance(confidence, int):
-                        try:
-                            confidence = int(float(confidence))
-                        except (TypeError, ValueError):
-                            confidence = 3
-                    confidence = max(1, min(5, confidence))
-                except Exception as e:
-                    log_step("CROSS_CLUSTER_LLM_ERROR", f"({node_a}, {node_b}): {e}")
-                    continue
-
-                if relation not in ("equivalent", "subsumes", "subsumed_by", "orthogonal"):
-                    relation = "orthogonal"
-
-                if relation != "orthogonal" and confidence >= 3:
-                    rec = {
-                        "node_a": node_a,
-                        "node_b": node_b,
-                        "relation": relation,
-                        "similarity": round(sim, 4),
-                        "confidence": confidence,
-                    }
-                    cross_cluster_edges.append(rec)
-                    if relation == "equivalent":
-                        union(node_a, node_b)
-                    elif relation == "subsumes":
-                        u, v = find(node_a), find(node_b)
-                        if u != v:
-                            edge_set.add((u, v))
-                    elif relation == "subsumed_by":
-                        u, v = find(node_b), find(node_a)
-                        if u != v:
-                            edge_set.add((u, v))
-
-                done_pairs.add((node_a, node_b))
-                done_pairs.add((node_b, node_a))
-
-                with open(cross_path, "w", encoding="utf-8") as f:
-                    for rec in cross_cluster_edges:
-                        f.write(json.dumps(rec) + "\n")
-
-    # 4. Build global merge_groups and canonical_nodes
-    merge_groups_map: Dict[str, List[str]] = defaultdict(list)
-    for n in all_node_strings:
-        merge_groups_map[find(n)].append(n)
-    merge_groups = [sorted(set(g)) for g in merge_groups_map.values() if len(g) > 1]
-    canonical_nodes = sorted(set(find(n) for n in all_node_strings))
-
-    # 5. Persist direct edges only (skip global transitive closure to keep artifact small)
-    edges_list = [{"parent": u, "child": v} for u, v in sorted(edge_set)]
-    final_edges = edges_list
-    inferred_edges: List[Dict[str, str]] = []
-
-    out = {
-        "canonical_nodes": canonical_nodes,
-        "merge_groups": merge_groups,
-        "edges": final_edges,
-        "inferred_edges": inferred_edges,
-    }
     ensure_output_dirs()
-    with open(GLOBAL_GRAPH_PATH, "w", encoding="utf-8") as f:
-        json.dump(out, f, indent=2)
+    with open(META_THEMES_PATH, "w", encoding="utf-8") as f:
+        json.dump({"meta_themes": meta_themes}, f, indent=2)
 
-    n_cross_new = len(cross_cluster_edges) - existing_cross_count if not skip_cross_cluster else 0
-    summary = f"Global graph: {len(canonical_nodes)} nodes, {len(final_edges)} direct edges (closure not persisted). Cross-cluster: {'skipped' if skip_cross_cluster else f'{n_cross_new} new edges'}. See {display_path(GLOBAL_GRAPH_PATH)}"
+    summary = f"Meta-themes: {len(meta_themes)} groups covering {len(all_cids)} clusters. See {display_path(META_THEMES_PATH)}"
     return summary
-
-
 @tool
-def hierarchy_construction(research_question: str = "", sim_threshold: float = 0.85) -> str:
+def hierarchy_construction(research_question: str = "") -> str:
     """
-    Step 4 (LOGOS): Relationship classification + hierarchy edges.
-    For each cluster: embed codes + representative on CPU, filter pairs by cosine
-    similarity, classify kept pairs via LLM, save edges to JSONL and build
-    per-cluster hierarchy in gt_hierarchy.json.
+    Step 5b (LOGOS): Intra-cluster sub-theme grouping.
+    For each cluster: ask the LLM to organise codes into 2-5 sub-themes.
+    Writes gt_hierarchy.json in tree format (no pairwise edges, no transitive closure).
     """
     codebook_path = str(CODEBOOK_PATH)
     if not os.path.isfile(codebook_path):
@@ -900,147 +592,240 @@ def hierarchy_construction(research_question: str = "", sim_threshold: float = 0
     if not cluster_to_codes:
         return json.dumps({"error": "No cluster_to_codes in codebook.json."})
 
-    model_name = os.environ.get("GT_EMBED_MODEL") or (
-        str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B") if os.path.isdir(str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B")) else "Qwen/Qwen3-Embedding-0.6B"
-    )
-    if os.path.isdir(model_name):
-        model_name = os.path.abspath(model_name)
+    # Resume: load existing hierarchy if present
+    existing_hierarchy: Dict[str, Any] = {}
+    if os.path.isfile(str(HIERARCHY_PATH)):
+        try:
+            with open(HIERARCHY_PATH, encoding="utf-8") as f:
+                existing_hierarchy = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            existing_hierarchy = {}
 
-    embed_model = SentenceTransformer(model_name, device="cpu")
-
-    edges_path = str(HIERARCHY_EDGES_PATH)
-    done_pairs: set = set()
-    existing_edges: List[Dict] = []
-    if os.path.isfile(edges_path):
-        with open(edges_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    e = json.loads(line)
-                    existing_edges.append(e)
-                    done_pairs.add((e["cluster_id"], e["node_a"], e["node_b"]))
-                except (json.JSONDecodeError, KeyError):
-                    pass
-
-    all_edges = list(existing_edges)
+    hierarchy: Dict[str, Any] = dict(existing_hierarchy)
 
     for cid, codes in sorted(cluster_to_codes.items(), key=lambda x: int(x[0])):
-        representative = codebook.get(cid, f"Cluster {cid}")
-        # Do NOT include the representative in pairwise comparison — it's a
-        # high-level label that the LLM will say "subsumes" nearly everything,
-        # creating a star topology.  It is installed as root parent later in
-        # _build_hierarchy instead.
-        nodes = list(dict.fromkeys(codes))
-
-        if len(nodes) < 2:
+        if cid in hierarchy:
+            log_step("HIERARCHY_SKIP", f"Cluster {cid} already done, skipping.")
             continue
 
-        embeddings = embed_model.encode(nodes, normalize_embeddings=True)
-        embeddings = np.asarray(embeddings, dtype=np.float32)
-        sim_matrix = embeddings @ embeddings.T
+        label = codebook.get(cid, f"Cluster {cid}")
+        unique_codes = list(dict.fromkeys(codes))
 
-        n = len(nodes)
-        candidates = []
-        for i in range(n):
-            for j in range(i + 1, n):
-                if sim_matrix[i][j] >= sim_threshold:
-                    candidates.append((nodes[i], nodes[j], float(sim_matrix[i][j])))
+        # Small clusters: all codes are direct children, no sub-theming needed
+        if len(unique_codes) <= 5:
+            hierarchy[cid] = {
+                "label": label,
+                "sub_themes": [],
+                "ungrouped_codes": unique_codes,
+            }
+            log_step("HIERARCHY_CLUSTER_DONE", f"Cluster {cid} ({label}): {len(unique_codes)} codes (small, no sub-themes)")
+            _save_hierarchy(hierarchy)
+            continue
 
-        # Cap pairs per cluster to avoid O(N²) LLM calls on large clusters
-        candidates.sort(key=lambda x: -x[2])
-        candidates = candidates[:MAX_PAIRS_PER_CLUSTER]
+        # For large clusters, batch codes to avoid exceeding context window
+        # Send up to 60 codes at a time; if more, do a second pass to assign extras
+        BATCH_SIZE = 60
+        if len(unique_codes) <= BATCH_SIZE:
+            codes_for_prompt = unique_codes
+        else:
+            codes_for_prompt = unique_codes[:BATCH_SIZE]
 
-        for node_a, node_b, sim in candidates:
-            if (cid, node_a, node_b) in done_pairs:
+        codes_list_str = "\n".join(f"- {c}" for c in codes_for_prompt)
+        prompt = intra_cluster_subtheme_prompt(label, codes_list_str, research_question)
+
+        try:
+            raw = llm.invoke(prompt).content
+            parsed = clean_and_parse_json(raw)
+        except Exception as e:
+            log_step("HIERARCHY_LLM_ERROR", f"Cluster {cid}: {e}")
+            # Fallback: all codes as ungrouped
+            hierarchy[cid] = {
+                "label": label,
+                "sub_themes": [],
+                "ungrouped_codes": unique_codes,
+            }
+            _save_hierarchy(hierarchy)
+            continue
+
+        sub_themes = parsed.get("sub_themes", [])
+        ungrouped = parsed.get("ungrouped_codes", [])
+
+        # Validate: ensure all codes are accounted for
+        assigned_codes: set = set()
+        validated_sub_themes: List[Dict[str, Any]] = []
+        for st in sub_themes:
+            if not isinstance(st, dict):
                 continue
+            st_codes = [c for c in st.get("codes", []) if c in set(codes_for_prompt)]
+            assigned_codes.update(st_codes)
+            if st_codes:
+                validated_sub_themes.append({"name": st.get("name", "Unnamed"), "codes": st_codes})
 
-            prompt = relationship_classification_prompt(node_a, node_b, research_question)
+        validated_ungrouped = [c for c in ungrouped if c in set(codes_for_prompt) and c not in assigned_codes]
+        assigned_codes.update(validated_ungrouped)
 
-            try:
-                raw = llm.invoke(prompt).content
-                parsed = clean_and_parse_json(raw)
-                relation = parsed.get("relation", "orthogonal")
-                reason = parsed.get("reason", "")
-                confidence = parsed.get("confidence", 3)
-                if not isinstance(confidence, int):
-                    try:
-                        confidence = int(float(confidence))
-                    except (TypeError, ValueError):
-                        confidence = 3
-                confidence = max(1, min(5, confidence))
-            except Exception as e:
-                log_step("HIERARCHY_LLM_ERROR", f"Cluster {cid}, ({node_a}, {node_b}): {e}")
-                continue
+        # Any codes the LLM missed go to ungrouped
+        missing = [c for c in codes_for_prompt if c not in assigned_codes]
+        validated_ungrouped.extend(missing)
 
-            if relation not in ("equivalent", "subsumes", "subsumed_by", "orthogonal"):
-                relation = "orthogonal"
+        # If we batched, assign remaining codes to existing sub-themes or ungrouped
+        if len(unique_codes) > BATCH_SIZE:
+            remaining = unique_codes[BATCH_SIZE:]
+            # Use a second LLM call to assign remaining codes to existing sub-themes
+            st_names = [st["name"] for st in validated_sub_themes]
+            if st_names:
+                assign_prompt = _assign_codes_to_subthemes_prompt(
+                    label, st_names, remaining, research_question
+                )
+                try:
+                    raw2 = llm.invoke(assign_prompt).content
+                    parsed2 = clean_and_parse_json(raw2)
+                    assignments = parsed2.get("assignments", {})
+                    assigned_remaining: set = set()
+                    for st_name, st_codes in assignments.items():
+                        if not isinstance(st_codes, list):
+                            continue
+                        for st in validated_sub_themes:
+                            if st["name"] == st_name:
+                                valid_codes = [c for c in st_codes if c in set(remaining)]
+                                st["codes"].extend(valid_codes)
+                                assigned_remaining.update(valid_codes)
+                                break
+                    leftover = [c for c in remaining if c not in assigned_remaining]
+                    validated_ungrouped.extend(leftover)
+                except Exception as e:
+                    log_step("HIERARCHY_BATCH2_ERROR", f"Cluster {cid}: {e}")
+                    validated_ungrouped.extend(remaining)
+            else:
+                validated_ungrouped.extend(remaining)
 
-            # Filter out low-confidence edges — only keep edges the LLM is reasonably sure about
-            if relation != "orthogonal" and confidence >= 3:
-                edge = {
-                    "cluster_id": cid,
-                    "node_a": node_a,
-                    "node_b": node_b,
-                    "relation": relation,
-                    "similarity": round(sim, 4),
-                    "confidence": confidence,
-                    "reason": reason,
-                }
-                all_edges.append(edge)
+        hierarchy[cid] = {
+            "label": label,
+            "sub_themes": validated_sub_themes,
+            "ungrouped_codes": validated_ungrouped,
+        }
+        total_codes = sum(len(st["codes"]) for st in validated_sub_themes) + len(validated_ungrouped)
+        log_step("HIERARCHY_CLUSTER_DONE", f"Cluster {cid} ({label}): {len(validated_sub_themes)} sub-themes, {total_codes} codes")
+        _save_hierarchy(hierarchy)
 
-            done_pairs.add((cid, node_a, node_b))
+    summary = f"Hierarchy: {len(hierarchy)} clusters with sub-theme groupings. See {display_path(HIERARCHY_PATH)}"
+    return summary
 
-            with open(edges_path, "w", encoding="utf-8") as f:
-                for edge_rec in all_edges:
-                    f.write(json.dumps(edge_rec) + "\n")
 
-        log_step("HIERARCHY_CLUSTER_DONE", f"Cluster {cid}: {len(candidates)} candidates processed")
-
-    hierarchy = _build_hierarchy(all_edges, cluster_to_codes, codebook)
+def _save_hierarchy(hierarchy: Dict[str, Any]) -> None:
+    """Persist hierarchy to disk (called after each cluster for resume support)."""
     ensure_output_dirs()
     with open(HIERARCHY_PATH, "w", encoding="utf-8") as f:
         json.dump(hierarchy, f, indent=2)
 
-    merges = sum(1 for e in all_edges if e["relation"] == "equivalent")
-    subsumptions = sum(1 for e in all_edges if e["relation"] in ("subsumes", "subsumed_by"))
-    summary = f"Hierarchy: {len(all_edges)} edges ({merges} merges, {subsumptions} subsumptions) across {len(cluster_to_codes)} clusters. See {display_path(HIERARCHY_EDGES_PATH)} and {display_path(HIERARCHY_PATH)}"
-    return summary
+
+def _assign_codes_to_subthemes_prompt(
+    cluster_label: str, sub_theme_names: List[str], codes: List[str], research_question: str
+) -> str:
+    """Prompt to assign overflow codes to existing sub-themes."""
+    st_list = "\n".join(f"- {name}" for name in sub_theme_names)
+    codes_list = "\n".join(f"- {c}" for c in codes)
+    rq_line = f"\nResearch Question: {research_question}\n" if research_question else ""
+    return f"""Cluster: "{cluster_label}"
+{rq_line}
+Existing sub-themes:
+{st_list}
+
+Assign each of the following codes to one of the sub-themes above. If a code does not fit any sub-theme, put it in "unassigned".
+
+Codes:
+{codes_list}
+
+Output ONLY valid JSON:
+{{"assignments": {{"Sub-Theme Name": ["code a", "code b"], "Another Sub-Theme": ["code c"]}}, "unassigned": ["code d"]}}"""
 
 
 @tool
-def graph_construction() -> str:
+def tree_assembly(research_question: str = "") -> str:
     """
-    Step 5 (LOGOS): Graph construction. Read gt_hierarchy.json, run BFS transitivity
-    per cluster with deduction-first conflict resolution, write gt_graph.json.
+    Step 6 (LOGOS): Tree assembly.
+    Read gt_meta_themes.json and gt_hierarchy.json, build a clean hierarchical tree,
+    write gt_global_graph.json with both tree structure and flat edge list.
     """
-    hierarchy_path = str(HIERARCHY_PATH)
-    if not os.path.isfile(hierarchy_path):
+    if not os.path.isfile(str(META_THEMES_PATH)):
+        return json.dumps({"error": "Missing gt_meta_themes.json; run meta_theme_grouping step first."})
+    if not os.path.isfile(str(HIERARCHY_PATH)):
         return json.dumps({"error": "Missing gt_hierarchy.json; run hierarchy step first."})
-    with open(hierarchy_path, encoding="utf-8") as f:
+    codebook_path = str(CODEBOOK_PATH)
+    if not os.path.isfile(codebook_path):
+        return json.dumps({"error": "Missing codebook.json; run high-level step first."})
+
+    with open(META_THEMES_PATH, encoding="utf-8") as f:
+        meta_data = json.load(f)
+    with open(HIERARCHY_PATH, encoding="utf-8") as f:
         hierarchy = json.load(f)
+    with open(codebook_path, encoding="utf-8") as f:
+        cb_data = json.load(f)
+    codebook = cb_data.get("codebook", {})
 
-    result = {}
-    total_edges = 0
-    for cid in sorted(hierarchy.keys(), key=lambda x: int(x)):
-        entry = hierarchy[cid]
-        merge_groups = entry.get("merge_groups", [])
-        edges = entry.get("edges", [])
-        canonical_nodes = entry.get("canonical_nodes", [])
-        final_edges, inferred_edges = _infer_graph_per_cluster(merge_groups, edges, canonical_nodes)
-        result[cid] = {
-            "merge_groups": merge_groups,
-            "canonical_nodes": canonical_nodes,
-            "edges": final_edges,
-            "inferred_edges": inferred_edges,
-        }
-        total_edges += len(final_edges)
+    meta_themes = meta_data.get("meta_themes", [])
 
+    # Build tree structure
+    root_name = research_question or "Thematic Analysis"
+    tree: Dict[str, Any] = {"name": root_name, "type": "root", "children": []}
+
+    # Also build flat edge list for backward compatibility
+    edges: List[Dict[str, str]] = []
+    all_nodes: List[str] = [root_name]
+
+    for mt in meta_themes:
+        mt_name = mt.get("name", "Unnamed Meta-Theme")
+        mt_node: Dict[str, Any] = {"name": mt_name, "type": "meta_theme", "children": []}
+        edges.append({"parent": root_name, "child": mt_name})
+        all_nodes.append(mt_name)
+
+        for cid in mt.get("cluster_ids", []):
+            cid = str(cid)
+            cluster_label = codebook.get(cid, f"Cluster {cid}")
+            cluster_entry = hierarchy.get(cid, {})
+            label = cluster_entry.get("label", cluster_label)
+
+            theme_node: Dict[str, Any] = {"name": label, "type": "theme", "children": []}
+            edges.append({"parent": mt_name, "child": label})
+            all_nodes.append(label)
+
+            # Sub-themes
+            for st in cluster_entry.get("sub_themes", []):
+                st_name = st.get("name", "Unnamed")
+                st_node: Dict[str, Any] = {"name": st_name, "type": "sub_theme", "children": []}
+                edges.append({"parent": label, "child": st_name})
+                all_nodes.append(st_name)
+
+                for code in st.get("codes", []):
+                    st_node["children"].append({"name": code, "type": "code"})
+                    edges.append({"parent": st_name, "child": code})
+                    all_nodes.append(code)
+
+                theme_node["children"].append(st_node)
+
+            # Ungrouped codes: direct children of the theme
+            for code in cluster_entry.get("ungrouped_codes", []):
+                theme_node["children"].append({"name": code, "type": "code"})
+                edges.append({"parent": label, "child": code})
+                all_nodes.append(code)
+
+            mt_node["children"].append(theme_node)
+
+        tree["children"].append(mt_node)
+
+    canonical_nodes = sorted(set(all_nodes))
+
+    out = {
+        "tree": tree,
+        "canonical_nodes": canonical_nodes,
+        "merge_groups": [],
+        "edges": edges,
+        "inferred_edges": [],
+    }
     ensure_output_dirs()
-    with open(GRAPH_PATH, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2)
+    with open(GLOBAL_GRAPH_PATH, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=2)
 
-    summary = f"Graph: {len(result)} clusters, {total_edges} total edges after inference. See {display_path(GRAPH_PATH)}"
+    summary = f"Tree assembled: {len(canonical_nodes)} nodes, {len(edges)} edges (strict hierarchy). See {display_path(GLOBAL_GRAPH_PATH)}"
     return summary
 
