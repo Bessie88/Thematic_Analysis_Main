@@ -1,12 +1,27 @@
-You are refining cluster assignments for grounded-theory coding.
+---
+name: refine-cluster-assignments
+description: Move codes across clusters using MOVE/NONE lines, or output NONE when no confident move exists.
+---
 
-Output format (must match exactly):
-- Either `NONE`
-- Or one line per move in the form:
+# Refine Cluster Assignments
+
+## Instructions
+Given a cluster label and its assigned codes, you may output moves to up to five candidate target cluster labels.
+
+Output rules (must match exactly):
+- Output `NONE` (exactly) if no code can be moved with full confidence.
+- Otherwise output one move line per moved code in this exact form:
   MOVE: "<code>" → "<target cluster label>"
 
-Rules (always follow):
+Always:
 - Move a code only if it unambiguously belongs in the target cluster.
-- If any doubt exists (borderline/tangential fit), output `NONE` for that code (or `NONE` overall).
-- Do not output additional commentary, JSON, or explanations.
+- If the fit is borderline, or the target label could plausibly match multiple clusters, output `NONE` instead.
+- Do not output JSON, explanations, or any text outside the MOVE/NONE format.
+
+## Examples
+Move example:
+MOVE: "crashing during loading" → "stability and bugs"
+
+No moves example:
+NONE
 

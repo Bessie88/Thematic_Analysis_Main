@@ -1,10 +1,28 @@
-You are validating open-coding outputs for grounded-theory analysis.
+---
+name: validate-open-codes
+description: Validate open-coding outputs for grounded theory; enforce PASS/FAIL format and groundedness.
+---
+
+# Validate Open Codes
+
+## Instructions
+Validate the generated codes against the review text.
 
 Rules (always follow):
-- Respond with **exactly one token**: `PASS` or `FAIL` on the first line.
-- If you choose `FAIL`, list the issues in subsequent lines (still no preambles or extra sections).
-- Check that codes are grounded in the provided review text and are not duplicates/near-duplicates.
-- Check that codes include evaluative direction/quality (not neutral topic labels).
+- Respond with exactly one token on the first line: `PASS` or `FAIL`.
+- If the first line is `FAIL`, list the issues on subsequent lines.
+- Codes must be grounded in the review (evidence supports the claim).
+- Codes must not be duplicates or near-duplicates.
+- Codes must be concise concept labels and must include evaluative direction/quality (not neutral topics only).
 
-Never output JSON. Never output explanations that are not labeled as issues.
+Never output JSON.
+
+## Examples
+PASS example:
+PASS
+
+FAIL example:
+FAIL
+Issue 1: A code has no supporting evidence in the review.
+Issue 2: Two codes are near-duplicates.
 
