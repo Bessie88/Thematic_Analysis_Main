@@ -1,6 +1,7 @@
 """CLI entry point for the GT pipeline."""
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from agents.core.paths import (
@@ -50,6 +51,11 @@ def main() -> None:
     p.add_argument("--high-level-only", action="store_true", help="Load gt_clustered_codes.json and run high-level code generation (LLM must be up).")
     p.add_argument("--refine-only", action="store_true", help="Run high-level (if needed) then refine_cluster_assignments. Requires codebook.json and gt_clustered_codes.json. LLM must be up.")
     p.add_argument("--hierarchy-only", action="store_true", help="Run hierarchy construction (intra-cluster sub-theme grouping). LLM must be up.")
+    p.add_argument(
+        "--graph-only",
+        action="store_true",
+        help="(Removed) Per-cluster graph step no longer exists; exits with instructions.",
+    )
     p.add_argument("--meta-themes-only", action="store_true", help="Run meta-theme grouping (group cluster labels into 4-5 meta-themes). LLM must be up.")
     p.add_argument("--tree-only", action="store_true", help="Run tree assembly (build hierarchical tree from meta-themes + hierarchy). No LLM needed.")
     p.add_argument("--global-graph-only", action="store_true", help="Alias for --tree-only (backward compat).")
@@ -67,6 +73,17 @@ def main() -> None:
     p.add_argument("--research-question", required=True, help="Research question that conditions the entire GT pipeline.")
     p.add_argument("--data", default=str(DEFAULT_DATA_CSV), help="CSV with text_review column.")
     args = p.parse_args()
+
+    if args.graph_only:
+        print(
+            "agents.cli: --graph-only was removed in the hierarchical pipeline refactor.",
+            file=sys.stderr,
+        )
+        print(
+            "Use: --meta-themes-only (after --hierarchy-only), then --global-graph-only or --tree-only.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
 
     ensure_output_dirs()
     rq = args.research_question

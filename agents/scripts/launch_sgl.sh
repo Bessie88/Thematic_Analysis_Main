@@ -5,12 +5,20 @@ AGENTS_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$AGENTS_ROOT/.." && pwd)"
 cd "$REPO_ROOT"
 export PYTHONPATH="$REPO_ROOT"
+# When stdout/stderr are redirected to server.log, Python block-buffers; logs look "empty" for a long time while the model loads.
+export PYTHONUNBUFFERED=1
+
+# Open-coding reads this CSV (column text_review). Default: school burnout test set.
+# Switch back to climate Reddit: export GT_DATA_CSV="$REPO_ROOT/data/reddit_comment_text_1000.csv"
+GT_DATA_CSV="${GT_DATA_CSV:-$REPO_ROOT/data/school_burnout_text_review.csv}"
 
 MODEL_PATH="$AGENTS_ROOT/weights/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
 SERVER_LOG="$AGENTS_ROOT/server.log"
 PORT=8000
-RESEARCH_QUESTION="How do commenters frame the severity of climate change and the possibility or impossibility of meaningful response?"
+RESEARCH_QUESTION="What themes do students express about school-related stress and burnout—including exhaustion, cynicism toward school, and feelings of inadequacy—and how do they frame causes and coping?"
+# RESEARCH_QUESTION="How do commenters frame the severity of climate change and the possibility or impossibility of meaningful response?"
 # RESEARCH_QUESTION="What do players dislike about the game?"
+export RESEARCH_QUESTION
 
 # Stop SGLang reliably so GPU VRAM is freed before axial (embedding) and other steps.
 # Previously: ( cd ... && python ... ) &  made $! the subshell PID, so kill left the Python tree alive.
@@ -41,6 +49,45 @@ stop_sglang_server() {
     nvidia-smi 2>/dev/null || true
 }
 
+# Fail fast if this Python cannot see a GPU (common when MIG / Slurm GPU binding and container disagree).
+sglang_cuda_preflight() {
+    local model_path="$1"
+    echo "=== SGLang CUDA preflight ==="
+    echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-<unset>}"
+    echo "MODEL_PATH=$model_path"
+    if [ ! -d "$model_path" ]; then
+        echo "Error: model directory missing (wrong path or weights not on this filesystem)."
+        exit 1
+    fi
+    python - <<'PY' || exit 1
+import os, sys
+try:
+    import torch
+except Exception as e:
+    print("Error: import torch failed:", e, file=sys.stderr)
+    sys.exit(1)
+ok = torch.cuda.is_available()
+n = torch.cuda.device_count()
+print("torch.cuda.is_available():", ok)
+print("torch.cuda.device_count():", n)
+if not ok or n < 1:
+    print(
+        "Error: no CUDA device visible to PyTorch inside this environment.\n"
+        "  Typical causes: MIG slice vs full GPU mismatch, wrong Slurm --gres, or Apptainer --nv not passing the GPU.\n"
+        "  Ask your site how to run GPU jobs on this partition (CUDA_VISIBLE_DEVICES / MIG instance ID).",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+print("device 0:", torch.cuda.get_device_name(0))
+PY
+    echo "=== end preflight ==="
+}
+
+_models_endpoint_ready() {
+    local port="$1"
+    curl -sS --connect-timeout 2 --max-time 10 "http://127.0.0.1:${port}/v1/models" 2>/dev/null | grep -qE '"object"[[:space:]]*:[[:space:]]*"list"'
+}
+
 # Wait until OpenAI-compatible /v1/models responds (shared by Qwen and Mistral phases).
 # Args: port, log_file, pid, label
 wait_for_openai_ready() {
@@ -49,9 +96,10 @@ wait_for_openai_ready() {
     local pid="$3"
     local phase_label="${4:-SGLang}"
     local counter=0
+    local diagf=""
     echo "Waiting for $phase_label to become ready on port $port..."
     while true; do
-        if curl -s "http://localhost:${port}/v1/models" | grep -q '"object":"list"'; then
+        if _models_endpoint_ready "$port"; then
             echo "$phase_label is READY!"
             return 0
         fi
@@ -66,6 +114,21 @@ wait_for_openai_ready() {
             tail -n 50 "$log_file"
             return 1
         fi
+        # Every ~5 min: show HTTP status, response snippet, log size (helps debug hang vs wrong JSON vs slow load).
+        if [ "$counter" -gt 0 ] && [ $((counter % 60)) -eq 0 ]; then
+            diagf=$(mktemp /tmp/sgl_diag.XXXXXX 2>/dev/null || echo "/tmp/sgl_diag.$$")
+            # Do not use "|| echo 000" — curl already prints 000 on failure and would concatenate to 000000.
+            http_code=$(curl -sS -o "$diagf" --connect-timeout 2 --max-time 15 -w "%{http_code}" "http://127.0.0.1:${port}/v1/models" 2>/dev/null) || true
+            http_code="${http_code:-000}"
+            log_bytes=$(wc -c <"$log_file" 2>/dev/null || echo 0)
+            echo "  [diag @${counter}] GET /v1/models http=${http_code} server.log_bytes=${log_bytes}"
+            if [ -s "$diagf" ]; then
+                echo -n "  [diag] body head: "
+                head -c 240 "$diagf" | tr '\n' ' '
+                echo
+            fi
+            rm -f "$diagf" 2>/dev/null || true
+        fi
         echo "Waiting for $phase_label... ($counter/$MAX_RETRIES)"
         sleep 5
         ((counter++))
@@ -73,6 +136,8 @@ wait_for_openai_ready() {
 }
 
 # --- 2. Launch Server in Background ---
+sglang_cuda_preflight "$MODEL_PATH"
+
 echo "Starting SGLang server..."
 # Run python directly (no subshell) so $! is the real server PID.
 python -m sglang.launch_server \
@@ -94,7 +159,8 @@ fi
 
 # --- 4. Open coding only (then kill SGLang so axial can use GPU for embed model) ---
 echo "Starting Open Coding (agents.cli --open-coding-only)..."
-python -m agents.cli --open-coding-only --research-question "$RESEARCH_QUESTION"
+echo "GT_DATA_CSV=$GT_DATA_CSV"
+python -m agents.cli --open-coding-only --research-question "$RESEARCH_QUESTION" --data "$GT_DATA_CSV"
 OPEN_EXIT=$?
 echo "Open coding finished with exit code $OPEN_EXIT. Killing SGLang server..."
 stop_sglang_server "$SERVER_PID"
@@ -131,6 +197,8 @@ if [ $AXIAL_EXIT -ne 0 ]; then
 fi
 
 # --- 7. Restart SGLang for high-level code generation ---
+sglang_cuda_preflight "$MODEL_PATH"
+
 echo "Restarting SGLang for high-level code generation..."
 python -m sglang.launch_server \
   --model-path "$MODEL_PATH" \
@@ -175,22 +243,23 @@ if [ $HIER_EXIT -ne 0 ]; then
     exit $HIER_EXIT
 fi
 
-# --- 11. Graph construction ---
-echo "Starting graph construction (agents.cli --graph-only)..."
-python -m agents.cli --graph-only --research-question "$RESEARCH_QUESTION"
-GRAPH_EXIT=$?
-if [ $GRAPH_EXIT -ne 0 ]; then
+# --- 11. Meta-theme grouping (LLM: writes gt_meta_themes.json) ---
+echo "Starting meta-theme grouping (agents.cli --meta-themes-only)..."
+python -m agents.cli --meta-themes-only --research-question "$RESEARCH_QUESTION"
+META_EXIT=$?
+echo "Meta-themes step finished with exit code $META_EXIT."
+if [ $META_EXIT -ne 0 ]; then
     stop_sglang_server "$SERVER_PID"
-    exit $GRAPH_EXIT
+    exit $META_EXIT
 fi
 
-# --- 12. Global graph construction ---
-echo "Starting global graph construction (agents.cli --global-graph-only)..."
+# --- 12. Tree assembly (no LLM: merges meta-themes + hierarchy into gt_global_graph.json) ---
+echo "Starting tree assembly (agents.cli --global-graph-only)..."
 python -m agents.cli --global-graph-only --research-question "$RESEARCH_QUESTION"
 GLOBAL_EXIT=$?
-echo "Global graph step finished with exit code $GLOBAL_EXIT."
+echo "Tree / global graph step finished with exit code $GLOBAL_EXIT."
 if [ $GLOBAL_EXIT -ne 0 ]; then
-    echo "Stopping SGLang after global graph failure..."
+    echo "Stopping SGLang after tree assembly failure..."
     stop_sglang_server "$SERVER_PID"
     exit $GLOBAL_EXIT
 fi
@@ -206,6 +275,8 @@ if [ ! -d "$REPORT_MODEL_PATH" ]; then
 fi
 
 REPORT_SERVER_LOG="$AGENTS_ROOT/report_server.log"
+sglang_cuda_preflight "$REPORT_MODEL_PATH"
+
 echo "Starting Mistral SGLang for research report..."
 python -m sglang.launch_server \
   --model-path "$REPORT_MODEL_PATH" \
@@ -227,4 +298,17 @@ python -m agents.cli --report-only --research-question "$RESEARCH_QUESTION"
 REPORT_STEP_EXIT=$?
 echo "Research report step finished with exit code $REPORT_STEP_EXIT. Stopping Mistral SGLang..."
 stop_sglang_server "$REPORT_PID"
-exit $REPORT_STEP_EXIT
+if [ "$REPORT_STEP_EXIT" -ne 0 ]; then
+    exit "$REPORT_STEP_EXIT"
+fi
+if [ "${UPLOAD_TO_SUPABASE:-0}" = "1" ]; then
+    echo "Uploading pipeline artifacts to Supabase (UPLOAD_TO_SUPABASE=1)..."
+    export PIPELINE_SLUG="${PIPELINE_SLUG:-default}"
+    if ! PYTHONPATH="$REPO_ROOT" python "$AGENTS_ROOT/scripts/upload_pipeline_to_supabase.py"; then
+        echo "Error: Supabase upload failed. Fix credentials/table or set UPLOAD_TO_SUPABASE=0 to skip."
+        exit 1
+    fi
+else
+    echo "Supabase upload skipped (UPLOAD_TO_SUPABASE is not 1). Set UPLOAD_TO_SUPABASE=1 and SUPABASE_* in run.sh or the job environment to enable."
+fi
+exit 0
