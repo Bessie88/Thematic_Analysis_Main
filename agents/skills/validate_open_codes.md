@@ -14,6 +14,7 @@ Rules (always follow):
 - Codes must be grounded in the review (evidence supports the claim).
 - Codes must not be duplicates or near-duplicates.
 - Codes must be concise concept labels and must include evaluative direction/quality (not neutral topics only).
+- codes must be relevant to the research question 
 
 Never output JSON.
 
