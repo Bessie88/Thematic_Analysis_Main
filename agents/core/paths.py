@@ -7,8 +7,19 @@ DATA_DIR = OUTPUTS_DIR / "data"
 LOGS_DIR = OUTPUTS_DIR / "logs"
 WEIGHTS_DIR = AGENTS_DIR / "weights"
 OLD_SLURM_DIR = AGENTS_DIR / "old_slurm.out"
-DEFAULT_DATA_CSV = AGENTS_DIR.parent / "data" / "reddit_comment_text_1000.csv"
+# School burnout test set (see notebooks/prepare_school_burnout_text_review.ipynb)
+SCHOOL_BURNOUT_TEXT_CSV = AGENTS_DIR.parent / "data" / "school_burnout_text_review.csv"
+# English game/software-style reviews (column `review_text`); cli also accepts `text_review`.
+REVIEW_TEXT_ENGLISH_1000_CSV = AGENTS_DIR.parent / "data" / "review_text_english_1000.csv"
 
+REDDIT_COMMENT_TEXT_1000_CSV = AGENTS_DIR.parent / "data" / "reddit_comment_text_1000.csv"
+REDDIT_COMMENT_TEXT_10000_CSV = AGENTS_DIR.parent / "data" / "reddit_comment_text_10000.csv"
+
+DEFAULT_DATA_CSV = REDDIT_COMMENT_TEXT_10000_CSV
+
+# DEFAULT_DATA_CSV = REDDIT_COMMENT_TEXT_1000_CSV
+# DEFAULT_DATA_CSV = REVIEW_TEXT_ENGLISH_1000_CSV
+# DEFAULT_DATA_CSV = SCHOOL_BURNOUT_TEXT_CSV
 # DEFAULT_DATA_CSV = AGENTS_DIR.parent / "data" / "review_text_english_50k.csv"
 
 GT_CODES_ONLY_PATH = DATA_DIR / "gt_codes_only.json"

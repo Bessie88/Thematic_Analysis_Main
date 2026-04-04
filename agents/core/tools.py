@@ -31,6 +31,8 @@ from .paths import (
     display_path,
     ensure_output_dirs,
 )
+from .hierarchy_refine import maybe_refine_hierarchy
+from .skills import llm_invoke_with_skill
 from .utils import clean_and_parse_json, log_step, remove_think_tags
 
 # Refine step: only offer the K most similar cluster labels as MOVE targets (embedding cosine).
@@ -65,7 +67,7 @@ def open_coding(text: str, research_question: str, validator_feedback: Optional[
     If validator_feedback is provided, use it to improve the previous attempt.
     """
     prompt = open_coding_prompt(research_question, text, validator_feedback=validator_feedback)
-    return llm.invoke(prompt).content
+    return llm_invoke_with_skill(llm, "open_coding", prompt)
 
 
 @tool
@@ -75,7 +77,7 @@ def validate_open_codes(text: str, generated_codes: str, research_question: str)
     Return PASS or FAIL and, if FAIL, list issues so the generator can improve.
     """
     prompt = validate_open_codes_prompt(research_question, text, generated_codes)
-    return llm.invoke(prompt).content
+    return llm_invoke_with_skill(llm, "validate_open_codes", prompt)
 
 
 def _deduplicate_codes(all_codes: List[str], model_name: str, near_dup_threshold: float = 0.95) -> tuple:
@@ -325,7 +327,7 @@ def high_level_code_generation(cluster_file: str = str(CLUSTERED_CODES_PATH), re
             prompt = high_level_code_generation_prompt(bulleted, research_question)
 
             try:
-                raw = llm.invoke(prompt).content
+                raw = llm_invoke_with_skill(llm, "high_level_code_generation", prompt)
                 parsed = clean_and_parse_json(remove_think_tags(raw))
                 label = (parsed.get("label") or "").strip().strip('"\'')
                 if not label or len(label) > 80:
@@ -430,7 +432,7 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
         prompt = refine_cluster_assignments_prompt(label, bulleted, other_str)
 
         try:
-            raw = remove_think_tags(llm.invoke(prompt).content)
+            raw = remove_think_tags(llm_invoke_with_skill(llm, "refine_cluster_assignments", prompt))
         except Exception as e:
             log_step("REFINE_LLM_ERROR", f"Cluster {cid}: {e}")
             continue
@@ -545,7 +547,7 @@ def meta_theme_grouping(research_question: str = "") -> str:
 
     prompt = meta_theme_grouping_prompt(labels_json, research_question)
     try:
-        raw = llm.invoke(prompt).content
+        raw = llm_invoke_with_skill(llm, "meta_theme_grouping", prompt)
         parsed = clean_and_parse_json(raw)
     except Exception as e:
         log_step("META_THEME_LLM_ERROR", str(e))
@@ -634,7 +636,7 @@ def hierarchy_construction(research_question: str = "") -> str:
         prompt = intra_cluster_subtheme_prompt(label, codes_list_str, research_question)
 
         try:
-            raw = llm.invoke(prompt).content
+            raw = llm_invoke_with_skill(llm, "hierarchy_construction", prompt)
             parsed = clean_and_parse_json(raw)
         except Exception as e:
             log_step("HIERARCHY_LLM_ERROR", f"Cluster {cid}: {e}")
@@ -678,7 +680,7 @@ def hierarchy_construction(research_question: str = "") -> str:
                     label, st_names, remaining, research_question
                 )
                 try:
-                    raw2 = llm.invoke(assign_prompt).content
+                    raw2 = llm_invoke_with_skill(llm, "hierarchy_construction", assign_prompt)
                     parsed2 = clean_and_parse_json(raw2)
                     assignments = parsed2.get("assignments", {})
                     assigned_remaining: set = set()
@@ -719,6 +721,31 @@ def _save_hierarchy(hierarchy: Dict[str, Any]) -> None:
         json.dump(hierarchy, f, indent=2)
 
 
+def _build_sub_theme_node(
+    st: Dict[str, Any],
+    parent_name: str,
+    edges: List[Dict[str, str]],
+    all_nodes: List[str],
+) -> Dict[str, Any]:
+    """Build a sub_theme tree node; supports nested sub_themes (post hierarchy_refine)."""
+    st_name = st.get("name", "Unnamed")
+    edges.append({"parent": parent_name, "child": st_name})
+    all_nodes.append(st_name)
+    st_node: Dict[str, Any] = {"name": st_name, "type": "sub_theme", "children": []}
+    nested = st.get("sub_themes")
+    if isinstance(nested, list) and nested:
+        for child in nested:
+            if isinstance(child, dict):
+                st_node["children"].append(_build_sub_theme_node(child, st_name, edges, all_nodes))
+    for code in st.get("codes") or []:
+        if not isinstance(code, str):
+            continue
+        st_node["children"].append({"name": code, "type": "code"})
+        edges.append({"parent": st_name, "child": code})
+        all_nodes.append(code)
+    return st_node
+
+
 def _assign_codes_to_subthemes_prompt(
     cluster_label: str, sub_theme_names: List[str], codes: List[str], research_question: str
 ) -> str:
@@ -744,8 +771,9 @@ Output ONLY valid JSON:
 def tree_assembly(research_question: str = "") -> str:
     """
     Step 6 (LOGOS): Tree assembly.
-    Read gt_meta_themes.json and gt_hierarchy.json, build a clean hierarchical tree,
-    write gt_global_graph.json with both tree structure and flat edge list.
+    Read gt_meta_themes.json and gt_hierarchy.json, optionally refine hierarchy to cap code fan-out
+    (GT_HIERARCHY_REFINE, rewrites gt_hierarchy.json), then build a hierarchical tree with nested
+    sub_themes, write gt_global_graph.json with tree structure and flat edge list.
     """
     if not os.path.isfile(str(META_THEMES_PATH)):
         return json.dumps({"error": "Missing gt_meta_themes.json; run meta_theme_grouping step first."})
@@ -759,6 +787,15 @@ def tree_assembly(research_question: str = "") -> str:
         meta_data = json.load(f)
     with open(HIERARCHY_PATH, encoding="utf-8") as f:
         hierarchy = json.load(f)
+
+    def _invoke_skill(skill_key: str, human_prompt: str) -> str:
+        return llm_invoke_with_skill(llm, skill_key, human_prompt)
+
+    hierarchy = maybe_refine_hierarchy(hierarchy, research_question or "", _invoke_skill)
+    ensure_output_dirs()
+    with open(HIERARCHY_PATH, "w", encoding="utf-8") as f:
+        json.dump(hierarchy, f, indent=2)
+
     with open(codebook_path, encoding="utf-8") as f:
         cb_data = json.load(f)
     codebook = cb_data.get("codebook", {})
@@ -789,19 +826,10 @@ def tree_assembly(research_question: str = "") -> str:
             edges.append({"parent": mt_name, "child": label})
             all_nodes.append(label)
 
-            # Sub-themes
+            # Sub-themes (flat or nested after hierarchy_refine)
             for st in cluster_entry.get("sub_themes", []):
-                st_name = st.get("name", "Unnamed")
-                st_node: Dict[str, Any] = {"name": st_name, "type": "sub_theme", "children": []}
-                edges.append({"parent": label, "child": st_name})
-                all_nodes.append(st_name)
-
-                for code in st.get("codes", []):
-                    st_node["children"].append({"name": code, "type": "code"})
-                    edges.append({"parent": st_name, "child": code})
-                    all_nodes.append(code)
-
-                theme_node["children"].append(st_node)
+                if isinstance(st, dict):
+                    theme_node["children"].append(_build_sub_theme_node(st, label, edges, all_nodes))
 
             # Ungrouped codes: direct children of the theme
             for code in cluster_entry.get("ungrouped_codes", []):
@@ -826,6 +854,9 @@ def tree_assembly(research_question: str = "") -> str:
     with open(GLOBAL_GRAPH_PATH, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2)
 
-    summary = f"Tree assembled: {len(canonical_nodes)} nodes, {len(edges)} edges (strict hierarchy). See {display_path(GLOBAL_GRAPH_PATH)}"
+    summary = (
+        f"Tree assembled: {len(canonical_nodes)} nodes, {len(edges)} edges (strict hierarchy). "
+        f"See {display_path(GLOBAL_GRAPH_PATH)} (hierarchy may have been refined; {display_path(HIERARCHY_PATH)})"
+    )
     return summary
 

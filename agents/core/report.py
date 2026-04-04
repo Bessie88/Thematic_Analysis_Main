@@ -10,6 +10,7 @@ from langchain_openai import ChatOpenAI
 
 from .paths import ensure_output_dirs
 from .prompts import research_report_prompt
+from .skills import llm_invoke_with_skill
 from .utils import log_step, remove_think_tags
 
 # Align with ~8k context: rough 4 chars/token, leave room for prompt template + RQ text.
@@ -166,7 +167,7 @@ def generate_research_report(
         max_tokens=max_tokens,
     )
     prompt = research_report_prompt(research_question, graph_text)
-    raw = llm.invoke(prompt).content or ""
+    raw = llm_invoke_with_skill(llm, "research_report", prompt) or ""
     cleaned = remove_think_tags(raw)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

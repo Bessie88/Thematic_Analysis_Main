@@ -71,7 +71,11 @@ def main() -> None:
         help="(Deprecated, ignored) Cosine similarity threshold no longer used in tree mode.",
     )
     p.add_argument("--research-question", required=True, help="Research question that conditions the entire GT pipeline.")
-    p.add_argument("--data", default=str(DEFAULT_DATA_CSV), help="CSV with text_review column.")
+    p.add_argument(
+        "--data",
+        default=str(DEFAULT_DATA_CSV),
+        help="CSV with a text column: 'text_review' (preferred) or 'review_text'.",
+    )
     args = p.parse_args()
 
     if args.graph_only:
@@ -176,7 +180,17 @@ def main() -> None:
         raise SystemExit(0)
 
     text_df = pd.read_csv(args.data)
-    reviews = text_df["text_review"].astype(str).tolist()
+    if "text_review" in text_df.columns:
+        text_col = "text_review"
+    elif "review_text" in text_df.columns:
+        text_col = "review_text"
+    else:
+        print(
+            f"Error: CSV must have column 'text_review' or 'review_text'; got {list(text_df.columns)}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    reviews = text_df[text_col].astype(str).tolist()
     all_open_codes = []
 
     for idx, review in enumerate(reviews, start=1):

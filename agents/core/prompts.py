@@ -199,14 +199,46 @@ Output ONLY valid JSON:
 ], "ungrouped_codes": ["code d"]}}"""
 
 
+def hierarchy_refine_bucket_prompt(
+    cluster_label: str,
+    bucket_label: str,
+    codes_bulleted: str,
+    research_question: str,
+    num_groups: int,
+) -> str:
+    """Split a large code list into exactly num_groups thematic sub-buckets (flat JSON)."""
+    rq_line = f"\nResearch Question: {research_question}\n" if research_question else ""
+    return f"""You are refining a thematic hierarchy for readability. Too many codes sit under one parent; split them into smaller groups.
+
+Cluster (context): "{cluster_label}"
+Parent bucket to subdivide: "{bucket_label}"
+{rq_line}
+The following codes must be partitioned into exactly {num_groups} non-empty sub-groups. Each code appears in exactly one group.
+
+Codes (use EXACT strings; do not rename or drop any):
+{codes_bulleted}
+
+Rules:
+- Output exactly {num_groups} sub-themes in the JSON array.
+- Each sub-theme has a short name (2–6 words) and a "codes" list.
+- Every code from the list above must appear once across all groups.
+- Balance sizes when possible (avoid one giant group and many tiny ones).
+
+Output ONLY valid JSON:
+{{"sub_themes": [
+  {{"name": "Sub-group name", "codes": ["code a", "code b"]}},
+  ...
+]}}"""
+
+
 def research_report_prompt(research_question: str, graph_text: str) -> str:
     """Prompt for final qualitative synthesis from the global thematic graph (markdown output)."""
-    return f"""You are a qualitative researcher writing a short synthesis for a grounded-theory style analysis.
+    return f"""You are a qualitative researcher. Your job is to **answer the research question** below using the thematic graph as evidence—not to describe or explain the graph as your main topic.
 
 Research question:
 {research_question}
 
-You are given a **thematic graph** as text: a list of **nodes** (theme codes) and **edges** (directed parent → child relationships interpreted from the analysis pipeline). Use ONLY information supported by these nodes and edges. Do not invent themes or relations that are not reflected in the graph text.
+Below is a **thematic graph** as text: **nodes** (theme labels) and **edges** (parent → child relationships from the analysis pipeline). Treat it as the empirical backbone: only claim what these nodes and edges support. Do not invent themes or relations missing from the graph text.
 
 Thematic graph:
 {graph_text}
@@ -217,9 +249,9 @@ Write your response in **markdown** with exactly these sections:
 Restate the research question in one sentence (you may quote it).
 
 ## Graph structure
-One short line: how many nodes and how many edges were provided (or stated in the graph header).
+One short line only: how many nodes and how many edges (or counts from the graph header). No thematic interpretation in this section.
 
 ## Research answer
-A concise answer to the research question in **a few sentences** (about 3–6), grounded strictly in the nodes and edges above. If the graph is ambiguous or thin for the question, say so briefly and still summarize what the graph does support.
+**3–6 sentences** that **directly answer the research question** (e.g. how commenters frame severity, hope, denial, responsibility—whatever the question asks). Write about people, framings, and themes in the corpus. You may refer to specific theme names when helpful, but **avoid** opening with “the graph shows/reveals” and **avoid** narrating the graph structure (listing branches, saying “the graph is interconnected”) as a substitute for answering the question. If evidence is weak or ambiguous, note that briefly, then still answer with what the graph supports.
 
 Do not output JSON. Do not add long bullet lists unless essential."""
