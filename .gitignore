@@ -30,3 +30,6 @@ dummy/
 .kaggle/
 
 agents/report_server.log
+
+agents/docs/
+notebooks/
