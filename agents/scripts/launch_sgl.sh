@@ -8,20 +8,37 @@ export PYTHONPATH="$REPO_ROOT"
 # When stdout/stderr are redirected to server.log, Python block-buffers; logs look "empty" for a long time while the model loads.
 export PYTHONUNBUFFERED=1
 
-# Open-coding reads this CSV (column text_review). Default: school burnout test set.
-# Switch back to climate Reddit: export GT_DATA_CSV="$REPO_ROOT/data/reddit_comment_text_1000.csv"
-GT_DATA_CSV="${GT_DATA_CSV:-$REPO_ROOT/data/school_burnout_text_review.csv}"
+# LangChain stack: bake into the .sif when you rebuild the image, or install once into the Apptainer
+ensure_pipeline_python_deps() {
+    if python -c "import langchain_core.messages; import langchain_openai" 2>/dev/null; then
+        return 0
+    fi
+    echo "Installing pipeline Python deps from $AGENTS_ROOT/requirements-pipeline.txt (user site)..."
+    if ! python -m pip install --user -r "$AGENTS_ROOT/requirements-pipeline.txt"; then
+        echo "Error: pip could not install LangChain deps. Add them to the container image or fix pip/network." >&2
+        exit 1
+    fi
+}
+ensure_pipeline_python_deps
+
+
+# Override examples:
+#   export GT_DATA_CSV="$REPO_ROOT/data/school_burnout_text_review.csv"
+#   export GT_DATA_CSV="$REPO_ROOT/data/reddit_comment_text_1000.csv"
+GT_DATA_CSV="${GT_DATA_CSV:-$REPO_ROOT/data/reddit_comment_text_10000.csv}"
 
 MODEL_PATH="$AGENTS_ROOT/weights/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
 SERVER_LOG="$AGENTS_ROOT/server.log"
 PORT=8000
-RESEARCH_QUESTION="What themes do students express about school-related stress and burnout—including exhaustion, cynicism toward school, and feelings of inadequacy—and how do they frame causes and coping?"
-# RESEARCH_QUESTION="How do commenters frame the severity of climate change and the possibility or impossibility of meaningful response?"
-# RESEARCH_QUESTION="What do players dislike about the game?"
+# Research question — uncomment the one matching the active dataset.
+# RESEARCH_QUESTION="What do players dislike about games and software in these reviews?"
+# RESEARCH_QUESTION="What do users dislike or find frustrating about games and software in these reviews, and how do they describe those issues?"
+# RESEARCH_QUESTION="What thematic patterns appear in how people describe their experience with games and software in these reviews?"
+# RESEARCH_QUESTION="What thematic patterns appear in how students describe their experience of school and academic demands?"
+RESEARCH_QUESTION="How do Reddit commenters frame the severity of climate change and the possibility or impossibility of meaningful response?"
 export RESEARCH_QUESTION
 
 # Stop SGLang reliably so GPU VRAM is freed before axial (embedding) and other steps.
-# Previously: ( cd ... && python ... ) &  made $! the subshell PID, so kill left the Python tree alive.
 stop_sglang_server() {
     local pid="${1:-}"
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
@@ -309,6 +326,6 @@ if [ "${UPLOAD_TO_SUPABASE:-0}" = "1" ]; then
         exit 1
     fi
 else
-    echo "Supabase upload skipped (UPLOAD_TO_SUPABASE is not 1). Set UPLOAD_TO_SUPABASE=1 and SUPABASE_* in run.sh or the job environment to enable."
+    echo "Supabase upload skipped (UPLOAD_TO_SUPABASE is not 1). With sbatch run.sh, export UPLOAD_TO_SUPABASE=1 in .env.supabase or rely on run.sh defaulting it to 1 when SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set."
 fi
 exit 0
