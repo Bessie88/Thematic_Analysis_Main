@@ -1,6 +1,6 @@
 ---
 name: open-coding
-description: How to perform open coding on one review and emit strict bullet-format codes with evidence.
+description: Open-code one review (0–3 codes or Applicability NONE when the text does not answer the research question); strict bullet format with evidence.
 ---
 
 # Open Coding
@@ -9,20 +9,23 @@ description: How to perform open coding on one review and emit strict bullet-for
 Follow the human prompt’s research question and review text.
 
 Always:
-- Produce **1–3** codes total per review.
-- Each code must be a **short noun phrase** (2–6 words) that includes an evaluative **quality/direction** (what is good/bad, what is frustrating, what is lacking).
-- Codes must be **grounded in the review text**.
-- codes must be relevant to the research question 
+- Produce **0–3** codes per review. If the review has **nothing** that answers the research question, output **no** `- Code:` lines — use the **Applicability: NONE** block from the human prompt instead of inventing codes.
+- When you do code, each label must be a **short noun phrase** (2–6 words) with evaluative **quality/direction**.
+- Codes must be **grounded in the review text** and **relevant to the research question**.
 
-Output format (must match exactly, no extra text):
-- Code: <code>
-  Evidence: "<short quote from the review>"
-  Note: <one short phrase why this code fits>
+Output formats (must match the human prompt exactly, no extra text):
+- When nothing applies: `- Applicability: NONE` with Reason and Evidence (no `- Code:` lines).
+- When coding: for each code, `- Code: ...` with Evidence and Note.
 
-If the human prompt includes reviewer feedback, incorporate it into the next code attempt.
+If the human prompt includes reviewer feedback, incorporate it into the next attempt.
 
 ## Examples
-Example output:
+No applicable content:
+- Applicability: NONE
+  Reason: The review only says the game is cool and does not mention negative feedback asked for by the question.
+  Evidence: "the game is very cool"
+
+Example with codes:
 - Code: frustrating difficulty spike
   Evidence: "The early levels were easy, then it got unexpectedly hard."
   Note: The reviewer describes a sudden jump in difficulty
