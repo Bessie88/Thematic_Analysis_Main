@@ -38,6 +38,132 @@ from .utils import clean_and_parse_json, log_step, remove_think_tags
 # Refine step: only offer the K most similar cluster labels as MOVE targets (embedding cosine).
 REFINE_TOP_K_OTHER_CLUSTERS = 5
 
+# Chunk sizes for LLM calls (context limits); see agents/docs/PIPELINE.md
+_EMBED_DRAIN_THRESHOLD = 20
+
+
+def _refine_llm_max_codes() -> int:
+    raw = os.environ.get("GT_REFINE_LLM_MAX_CODES", "44").strip()
+    try:
+        n = int(raw)
+        return max(16, min(80, n))
+    except ValueError:
+        return 44
+
+
+def _hierarchy_assign_batch() -> int:
+    raw = os.environ.get("GT_HIERARCHY_ASSIGN_BATCH", "40").strip()
+    try:
+        n = int(raw)
+        return max(20, min(60, n))
+    except ValueError:
+        return 40
+
+
+def _hierarchy_embed_drain_enabled() -> bool:
+    return os.environ.get("GT_HIERARCHY_EMBED_DRAIN_UNGROUPED", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _prune_hierarchy_to_valid_clusters(
+    hierarchy: Dict[str, Any], valid_ids: Set[str]
+) -> tuple[Dict[str, Any], List[str]]:
+    removed = [k for k in hierarchy if k not in valid_ids]
+    pruned = {k: v for k, v in hierarchy.items() if k in valid_ids}
+    return pruned, removed
+
+
+def _embed_model_name_for_hierarchy() -> str:
+    model_name = os.environ.get("GT_EMBED_MODEL") or (
+        str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B")
+        if os.path.isdir(str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B"))
+        else "Qwen/Qwen3-Embedding-0.6B"
+    )
+    if os.path.isdir(model_name):
+        model_name = os.path.abspath(model_name)
+    return model_name
+
+
+def _drain_ungrouped_to_subthemes(
+    validated_sub_themes: List[Dict[str, Any]],
+    validated_ungrouped: List[str],
+    embed_model: SentenceTransformer,
+) -> List[str]:
+    """Assign each ungrouped code to the nearest sub-theme by embedding cosine similarity."""
+    if not validated_sub_themes or not validated_ungrouped:
+        return validated_ungrouped
+    labels = [st["name"] for st in validated_sub_themes]
+    lab_emb = embed_model.encode(labels, normalize_embeddings=True, show_progress_bar=False)
+    code_emb = embed_model.encode(validated_ungrouped, normalize_embeddings=True, show_progress_bar=False)
+    lab_emb = np.asarray(lab_emb, dtype=np.float32)
+    code_emb = np.asarray(code_emb, dtype=np.float32)
+    sims = code_emb @ lab_emb.T
+    for i, code in enumerate(validated_ungrouped):
+        j = int(np.argmax(sims[i]))
+        validated_sub_themes[j]["codes"].append(code)
+    return []
+
+
+def _meta_theme_bounds(n_cids: int) -> tuple[int, int]:
+    if n_cids <= 1:
+        return 1, 1
+    if n_cids < 6:
+        return 2, min(7, n_cids)
+    return 3, 7
+
+
+def _split_largest_meta_theme(meta_themes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    largest = max(meta_themes, key=lambda m: len(m.get("cluster_ids", [])))
+    cids = list(largest.get("cluster_ids", []))
+    if len(cids) < 2:
+        return meta_themes
+    mid = len(cids) // 2
+    base = (largest.get("name") or "Theme").strip() or "Theme"
+    largest["cluster_ids"] = cids[:mid]
+    meta_themes.append({"name": f"{base} (continued)", "cluster_ids": cids[mid:]})
+    return meta_themes
+
+
+def _merge_two_smallest_meta(meta_themes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if len(meta_themes) < 2:
+        return meta_themes
+    indexed = sorted(enumerate(meta_themes), key=lambda x: len(x[1].get("cluster_ids", [])))
+    i_small, a = indexed[0]
+    j_small, b = indexed[1]
+    name_a = (a.get("name") or "A").strip() or "A"
+    name_b = (b.get("name") or "B").strip() or "B"
+    merged = {
+        "name": f"{name_a} / {name_b}",
+        "cluster_ids": list(a.get("cluster_ids", [])) + list(b.get("cluster_ids", [])),
+    }
+    new_list = [m for k, m in enumerate(meta_themes) if k not in (i_small, j_small)]
+    new_list.append(merged)
+    return new_list
+
+
+def _normalize_meta_theme_count(meta_themes: List[Dict[str, Any]], n_cids: int) -> List[Dict[str, Any]]:
+    lo, hi = _meta_theme_bounds(n_cids)
+    mt = list(meta_themes)
+    for _ in range(32):
+        k = len(mt)
+        if lo <= k <= hi:
+            return mt
+        if k < lo:
+            prev = len(mt)
+            mt = _split_largest_meta_theme(mt)
+            if len(mt) == prev:
+                break
+        elif k > hi:
+            prev = len(mt)
+            mt = _merge_two_smallest_meta(mt)
+            if len(mt) >= prev:
+                break
+    return mt
+
 
 # 2. LLM Setup (vLLM)
 # ==================================================
@@ -63,7 +189,8 @@ llm = ChatOpenAI(
 def open_coding(text: str, research_question: str, validator_feedback: Optional[str] = None) -> str:
     """
     Step 1: Open Coding (per review).
-    Extract 1–5 reusable constructs grounded in the text.
+    Extract 0–3 reusable constructs grounded in the text and the research question.
+    Use Applicability NONE when the review offers nothing relevant to the question.
     If validator_feedback is provided, use it to improve the previous attempt.
     """
     prompt = open_coding_prompt(research_question, text, validator_feedback=validator_feedback)
@@ -73,7 +200,7 @@ def open_coding(text: str, research_question: str, validator_feedback: Optional[
 @tool
 def validate_open_codes(text: str, generated_codes: str, research_question: str) -> str:
     """
-    Review open codes for one review. Check they are grounded, non-duplicate, and concise.
+    Review open coding output for one review (including Applicability NONE when no codes).
     Return PASS or FAIL and, if FAIL, list issues so the generator can improve.
     """
     prompt = validate_open_codes_prompt(research_question, text, generated_codes)
@@ -427,34 +554,48 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
             other_labels = [label_texts[j] for j in top_positions]
             other_str = ", ".join(other_labels)
 
-        bulleted = "\n".join(f"- {c}" for c in codes)
+        max_chunk = _refine_llm_max_codes()
+        chunk_codes_set = set(codes)
+        for chunk_idx, chunk_start in enumerate(range(0, len(codes), max_chunk)):
+            chunk = codes[chunk_start : chunk_start + max_chunk]
+            bulleted = "\n".join(f"- {c}" for c in chunk)
 
-        prompt = refine_cluster_assignments_prompt(label, bulleted, other_str)
+            prompt = refine_cluster_assignments_prompt(label, bulleted, other_str)
 
-        try:
-            raw = remove_think_tags(llm_invoke_with_skill(llm, "refine_cluster_assignments", prompt))
-        except Exception as e:
-            log_step("REFINE_LLM_ERROR", f"Cluster {cid}: {e}")
-            continue
-        for line in raw.splitlines():
-            line = line.strip()
-            if line.upper() == "NONE" or not line:
+            try:
+                raw = remove_think_tags(
+                    llm_invoke_with_skill(llm, "refine_cluster_assignments", prompt)
+                )
+            except Exception as e:
+                log_step("REFINE_LLM_ERROR", f"Cluster {cid} chunk {chunk_idx}: {e}")
                 continue
-            # Match MOVE: "code" → "target label" or MOVE: 'code' → 'target label'
-            match = re.search(r'MOVE:\s*["\']([^"\']+)["\']\s*[→>]\s*["\']([^"\']+)["\']', line, re.IGNORECASE)
-            if not match:
-                continue
-            code, target_label = match.group(1).strip(), match.group(2).strip()
-            target_cids = label_to_cids.get(target_label, [])
-            if not target_cids:
-                continue
-            if len(target_cids) > 1:
-                log_step("REFINE_SKIP_AMBIGUOUS_LABEL", f"MOVE skipped: label '{target_label}' maps to multiple clusters")
-                continue
-            target_cid = target_cids[0]
-            if target_cid == cid:
-                continue
-            moves_applied.append((code, cid, target_cid))
+            for line in raw.splitlines():
+                line = line.strip()
+                if line.upper() == "NONE" or not line:
+                    continue
+                match = re.search(
+                    r'MOVE:\s*["\']([^"\']+)["\']\s*[→>]\s*["\']([^"\']+)["\']',
+                    line,
+                    re.IGNORECASE,
+                )
+                if not match:
+                    continue
+                code, target_label = match.group(1).strip(), match.group(2).strip()
+                if code not in chunk_codes_set:
+                    continue
+                target_cids = label_to_cids.get(target_label, [])
+                if not target_cids:
+                    continue
+                if len(target_cids) > 1:
+                    log_step(
+                        "REFINE_SKIP_AMBIGUOUS_LABEL",
+                        f"MOVE skipped: label '{target_label}' maps to multiple clusters",
+                    )
+                    continue
+                target_cid = target_cids[0]
+                if target_cid == cid:
+                    continue
+                moves_applied.append((code, cid, target_cid))
 
     # Deduplicate: keep first move per code, warn on conflict (e.g. A->B and B->C for same code)
     seen_codes: Dict[str, tuple] = {}
@@ -523,13 +664,34 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
         codebook_confidence_rekeyed = {str(i): {"label": new_codebook[str(i)], "confidence": 1, "rationale": ""} for i in range(len(cid_list))}
     with open(confidence_path, "w", encoding="utf-8") as f:
         json.dump(codebook_confidence_rekeyed, f, indent=2)
+
+    # Drop hierarchy entries for cluster IDs that no longer exist after rekey
+    hier_path = str(HIERARCHY_PATH)
+    if os.path.isfile(hier_path):
+        try:
+            with open(hier_path, encoding="utf-8") as f:
+                hier = json.load(f)
+            if isinstance(hier, dict):
+                valid_h = set(new_cluster_to_codes.keys())
+                pruned, removed = _prune_hierarchy_to_valid_clusters(hier, valid_h)
+                if removed:
+                    ensure_output_dirs()
+                    with open(hier_path, "w", encoding="utf-8") as f:
+                        json.dump(pruned, f, indent=2)
+                    log_step(
+                        "HIERARCHY_PRUNE_AFTER_REFINE",
+                        f"Removed {len(removed)} stale cluster key(s) after rekey",
+                    )
+        except (json.JSONDecodeError, OSError, TypeError):
+            pass
+
     return f"Refined cluster assignments: {len(moves_applied)} codes moved across clusters."
 
 
 @tool
 def meta_theme_grouping(research_question: str = "") -> str:
     """
-    Step 5a (LOGOS): Group cluster labels into 4-5 broad meta-themes.
+    Step 5a (LOGOS): Group cluster labels into a small handful of broad meta-themes (about 3–7 when many clusters).
     Reads codebook.json, asks LLM to group all cluster labels, writes gt_meta_themes.json.
     """
     codebook_path = str(CODEBOOK_PATH)
@@ -541,23 +703,30 @@ def meta_theme_grouping(research_question: str = "") -> str:
     if not codebook:
         return json.dumps({"error": "No codebook in codebook.json."})
 
-    # Build the labels JSON for the prompt: {"0": "label", "1": "label", ...}
     labels_json = json.dumps(codebook, indent=2)
     all_cids = set(codebook.keys())
+    n_cids = len(all_cids)
+    lo, hi = _meta_theme_bounds(n_cids)
 
-    prompt = meta_theme_grouping_prompt(labels_json, research_question)
-    try:
+    def _call_meta_llm(extra: str = "") -> List[Dict[str, Any]]:
+        base = meta_theme_grouping_prompt(labels_json, research_question)
+        prompt = base + (extra or "")
         raw = llm_invoke_with_skill(llm, "meta_theme_grouping", prompt)
         parsed = clean_and_parse_json(raw)
+        mt = parsed.get("meta_themes", [])
+        if not isinstance(mt, list):
+            return []
+        return [m for m in mt if isinstance(m, dict)]
+
+    try:
+        meta_themes = _call_meta_llm()
     except Exception as e:
         log_step("META_THEME_LLM_ERROR", str(e))
         return json.dumps({"error": f"LLM call failed: {e}"})
 
-    meta_themes = parsed.get("meta_themes", [])
-    if not isinstance(meta_themes, list) or len(meta_themes) < 2:
+    if not meta_themes:
         return json.dumps({"error": "LLM returned invalid meta_themes structure."})
 
-    # Validate: all cluster IDs accounted for
     assigned_cids: set = set()
     for mt in meta_themes:
         for cid in mt.get("cluster_ids", []):
@@ -565,17 +734,55 @@ def meta_theme_grouping(research_question: str = "") -> str:
 
     missing = all_cids - assigned_cids
     if missing:
-        # Put missing clusters into the largest group
         largest = max(meta_themes, key=lambda m: len(m.get("cluster_ids", [])))
         for cid in missing:
             largest["cluster_ids"].append(str(cid))
-        log_step("META_THEME_FIXUP", f"Added {len(missing)} missing cluster(s) to group '{largest['name']}'")
+        log_step(
+            "META_THEME_FIXUP",
+            f"Added {len(missing)} missing cluster(s) to group '{largest.get('name', '')}'",
+        )
+
+    if not (lo <= len(meta_themes) <= hi):
+        reminder = (
+            f"\n\nIMPORTANT: You must output between {lo} and {hi} meta_themes (inclusive), "
+            f"each with a distinct name. Every cluster ID must appear exactly once."
+        )
+        try:
+            meta_themes_retry = _call_meta_llm(reminder)
+            if meta_themes_retry:
+                meta_themes = meta_themes_retry
+                assigned_cids = set()
+                for mt in meta_themes:
+                    for cid in mt.get("cluster_ids", []):
+                        assigned_cids.add(str(cid))
+                missing = all_cids - assigned_cids
+                if missing:
+                    largest = max(meta_themes, key=lambda m: len(m.get("cluster_ids", [])))
+                    for cid in missing:
+                        largest["cluster_ids"].append(str(cid))
+                    log_step(
+                        "META_THEME_FIXUP_RETRY",
+                        f"Added {len(missing)} missing cluster(s) after retry",
+                    )
+        except Exception as e:
+            log_step("META_THEME_RETRY_ERROR", str(e))
+
+    if not (lo <= len(meta_themes) <= hi):
+        before = len(meta_themes)
+        meta_themes = _normalize_meta_theme_count(meta_themes, n_cids)
+        log_step(
+            "META_THEME_REPAIR",
+            f"Adjusted meta-theme count from {before} to {len(meta_themes)} (bounds [{lo},{hi}])",
+        )
 
     ensure_output_dirs()
     with open(META_THEMES_PATH, "w", encoding="utf-8") as f:
         json.dump({"meta_themes": meta_themes}, f, indent=2)
 
-    summary = f"Meta-themes: {len(meta_themes)} groups covering {len(all_cids)} clusters. See {display_path(META_THEMES_PATH)}"
+    summary = (
+        f"Meta-themes: {len(meta_themes)} groups covering {len(all_cids)} clusters. "
+        f"See {display_path(META_THEMES_PATH)}"
+    )
     return summary
 @tool
 def hierarchy_construction(research_question: str = "") -> str:
@@ -604,6 +811,15 @@ def hierarchy_construction(research_question: str = "") -> str:
             existing_hierarchy = {}
 
     hierarchy: Dict[str, Any] = dict(existing_hierarchy)
+    valid_ids = set(cluster_to_codes.keys())
+    hierarchy, pruned_keys = _prune_hierarchy_to_valid_clusters(hierarchy, valid_ids)
+    if pruned_keys:
+        log_step(
+            "HIERARCHY_PRUNE",
+            f"Removed {len(pruned_keys)} stale cluster key(s) not in codebook: "
+            f"{pruned_keys[:20]}{'...' if len(pruned_keys) > 20 else ''}",
+        )
+        _save_hierarchy(hierarchy)
 
     for cid, codes in sorted(cluster_to_codes.items(), key=lambda x: int(x[0])):
         if cid in hierarchy:
@@ -670,36 +886,61 @@ def hierarchy_construction(research_question: str = "") -> str:
         missing = [c for c in codes_for_prompt if c not in assigned_codes]
         validated_ungrouped.extend(missing)
 
-        # If we batched, assign remaining codes to existing sub-themes or ungrouped
+        # If we batched, assign remaining codes in chunks (avoids one giant assign prompt)
         if len(unique_codes) > BATCH_SIZE:
             remaining = unique_codes[BATCH_SIZE:]
-            # Use a second LLM call to assign remaining codes to existing sub-themes
             st_names = [st["name"] for st in validated_sub_themes]
+            assign_batch = _hierarchy_assign_batch()
             if st_names:
-                assign_prompt = _assign_codes_to_subthemes_prompt(
-                    label, st_names, remaining, research_question
-                )
-                try:
-                    raw2 = llm_invoke_with_skill(llm, "hierarchy_construction", assign_prompt)
-                    parsed2 = clean_and_parse_json(raw2)
-                    assignments = parsed2.get("assignments", {})
-                    assigned_remaining: set = set()
-                    for st_name, st_codes in assignments.items():
-                        if not isinstance(st_codes, list):
-                            continue
-                        for st in validated_sub_themes:
-                            if st["name"] == st_name:
-                                valid_codes = [c for c in st_codes if c in set(remaining)]
-                                st["codes"].extend(valid_codes)
-                                assigned_remaining.update(valid_codes)
-                                break
-                    leftover = [c for c in remaining if c not in assigned_remaining]
-                    validated_ungrouped.extend(leftover)
-                except Exception as e:
-                    log_step("HIERARCHY_BATCH2_ERROR", f"Cluster {cid}: {e}")
-                    validated_ungrouped.extend(remaining)
+                for chunk_idx, chunk_start in enumerate(range(0, len(remaining), assign_batch)):
+                    chunk = remaining[chunk_start : chunk_start + assign_batch]
+                    assign_prompt = _assign_codes_to_subthemes_prompt(
+                        label, st_names, chunk, research_question
+                    )
+                    try:
+                        raw2 = llm_invoke_with_skill(llm, "hierarchy_construction", assign_prompt)
+                        parsed2 = clean_and_parse_json(raw2)
+                        assignments = parsed2.get("assignments", {})
+                        assigned_chunk: set = set()
+                        for st_name, st_codes in assignments.items():
+                            if not isinstance(st_codes, list):
+                                continue
+                            for st in validated_sub_themes:
+                                if st["name"] == st_name:
+                                    valid_codes = [c for c in st_codes if c in set(chunk)]
+                                    st["codes"].extend(valid_codes)
+                                    assigned_chunk.update(valid_codes)
+                                    break
+                        unassigned = parsed2.get("unassigned", [])
+                        if isinstance(unassigned, list):
+                            for c in unassigned:
+                                if isinstance(c, str) and c in chunk and c not in assigned_chunk:
+                                    validated_ungrouped.append(c)
+                                    assigned_chunk.add(c)
+                        for c in chunk:
+                            if c not in assigned_chunk:
+                                validated_ungrouped.append(c)
+                    except Exception as e:
+                        log_step(
+                            "HIERARCHY_BATCH2_ERROR",
+                            f"Cluster {cid} assign chunk {chunk_idx}: {e}",
+                        )
+                        validated_ungrouped.extend(chunk)
             else:
                 validated_ungrouped.extend(remaining)
+
+        if (
+            _hierarchy_embed_drain_enabled()
+            and len(validated_ungrouped) > _EMBED_DRAIN_THRESHOLD
+            and validated_sub_themes
+        ):
+            try:
+                drain_model = SentenceTransformer(_embed_model_name_for_hierarchy(), device="cpu")
+                validated_ungrouped = _drain_ungrouped_to_subthemes(
+                    validated_sub_themes, validated_ungrouped, drain_model
+                )
+            except Exception as e:
+                log_step("HIERARCHY_EMBED_DRAIN_ERROR", f"Cluster {cid}: {e}")
 
         hierarchy[cid] = {
             "label": label,
@@ -758,7 +999,7 @@ def _assign_codes_to_subthemes_prompt(
 Existing sub-themes:
 {st_list}
 
-Assign each of the following codes to one of the sub-themes above. If a code does not fit any sub-theme, put it in "unassigned".
+Assign each of the following codes to **one** of the sub-themes above. Prefer a **best-fit** sub-theme for every code; use "unassigned" only for codes that genuinely fit **none** of the listed sub-themes (keep "unassigned" empty or tiny).
 
 Codes:
 {codes_list}

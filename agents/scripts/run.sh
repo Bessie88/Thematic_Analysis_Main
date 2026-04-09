@@ -37,8 +37,7 @@ if [ -n "${SUPABASE_SERVICE_ROLE_KEY:-}" ] && [ -n "${SUPABASE_URL:-}" ]; then
   export UPLOAD_TO_SUPABASE="${UPLOAD_TO_SUPABASE:-1}"
 fi
 
-# Default CSV is reddit_comment_text_10000.csv (launch_sgl.sh). Override examples:
-# export GT_DATA_CSV=/scratch/nimamot/data/school_burnout_text_review.csv
+# Default CSV is school_burnout_text_review.csv (launch_sgl.sh). Override examples:
 # export GT_DATA_CSV=/scratch/nimamot/data/reddit_comment_text_1000.csv
 
 apptainer exec -C --nv --home /scratch/nimamot/vllm_env_home -W /scratch/nimamot/vllm_env_home -B /project -B /scratch "$SIF_PATH" bash "$AGENTS_SCRIPTS/launch_sgl.sh"

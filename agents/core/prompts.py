@@ -23,17 +23,25 @@ Research Question: {research_question}
 Focus on aspects of the review that are relevant to the research question above.
 
 Rules:
-- Produce 1 to 3 codes total (depending on content and length of the review).
+- Produce **0 to 3** codes, depending on whether the review actually offers material that **answers the research question**.
+- If the review is **off-topic**, **too thin**, or contains **nothing** that bears on the question (e.g. the question asks for negative feedback and the review only gives generic praise with no relevant substance), you must **not** invent codes — use the **Applicability: NONE** format below instead.
+- When the review **does** contain relevant material, produce 1–3 codes (up to 2 for short reviews under ~50 words unless clearly richer).
 - Each code must be a short noun phrase (2–6 words).
 - Codes must be distinct (no near-duplicates).
 - Each code must name a specific aspect AND its quality or direction — not just a neutral topic.
   Good: "laggy multiplayer matchmaking", "intuitive inventory controls", "frustrating difficulty spike"
   Bad: "matchmaking", "controls", "difficulty"
 - Codes must be grounded in the review text — do not invent concepts not present.
-- For short reviews under 50 words, produce at most 1 or 2 codes.
 {feedback_section}
 
-Output exactly as bullet points:
+When there is **nothing** to code for this research question, output **exactly** (no `- Code:` lines):
+
+- Applicability: NONE
+  Reason: <one or two sentences explaining why no code is appropriate>
+  Evidence: "<short quote from the review, or state that the text does not address the question>"
+
+When there **is** relevant material, output one block per code (no Applicability line):
+
 - Code: <code>
   Evidence: "<short quote from the review>"
   Note: <one short phrase why this code fits>
@@ -56,16 +64,25 @@ Research Question: {research_question}
 Input text (the review):
 {text}
 
-Generated codes:
+Coder output:
 {generated_codes}
 
-Check:
+First, determine whether the coder claimed **no applicable codes** (e.g. `- Applicability: NONE` and **no** lines of the form `- Code: ...`).
+
+If **no codes** were claimed:
+- PASS only if the review truly has **no** usable, question-relevant content to code (off-topic, empty of substance for the question, or praise/generic text that does not bear on what was asked). The Reason/Evidence should be accurate.
+- FAIL if the review **does** contain material that should have been coded, or if the justification is wrong or evasive.
+
+If **one or more** `- Code:` lines are present:
 1. Codes are grounded in the data (evidence in the review supports each code).
 2. Codes are not duplicates or near-duplicates of each other.
 3. Codes are concise concepts (short noun phrases, not vague or hallucinated).
 4. Codes are evaluatively specific — each names a concrete aspect AND its quality or
    direction (e.g. "poor enemy AI behaviour", not just "enemy AI").
    A code that is a neutral topic label with no direction should be flagged as FAIL.
+5. Each code is **relevant to the research question**; FAIL if a code is forced or tangential when the review does not support it.
+
+If the output mixes `- Applicability: NONE` with `- Code:` lines, or is empty, FAIL.
 
 Respond with exactly one of:
 - PASS
@@ -144,7 +161,7 @@ Output ONLY valid JSON: {{"relation": "<one of the four>", "confidence": <intege
 
 
 def meta_theme_grouping_prompt(labels_json: str, research_question: str) -> str:
-    """Prompt to group cluster labels into 4-5 broad meta-themes."""
+    """Prompt to group cluster labels into a small handful of broad meta-themes (about 3–7 when there are many clusters)."""
     rq_line = ""
     if research_question:
         rq_line = f"\nResearch Question: {research_question}\nGroup with the research question in mind.\n"
@@ -154,7 +171,10 @@ Below is a JSON object mapping cluster IDs to their labels:
 
 {labels_json}
 {rq_line}
-Your task: group ALL of these clusters into exactly 4 or 5 broad meta-themes.
+Your task: group ALL of these clusters into a **small handful** of broad meta-themes.
+- If there are **six or more** clusters, use about **3 to 7** meta-themes (not a rigid count — balance and coverage matter).
+- If there are **fewer than six** clusters, use **2 to N** themes where N is the number of clusters (merge only when labels are truly redundant).
+- With **one** cluster, use a single meta-theme.
 
 Rules:
 - Every cluster ID must appear in exactly one group — do not drop any.
@@ -187,8 +207,9 @@ Your task: organise these codes into 2–5 sub-themes that are more specific tha
 
 Rules:
 - Every code from the list above MUST appear in exactly one sub-theme OR in "ungrouped_codes".
+- Prefer **named sub-themes** for almost every code: keep "ungrouped_codes" **empty or as small as possible** — use it only when a code truly fits no sub-theme.
+- Add **enough** sub-themes so no single sub-theme carries an enormous list of codes (aim for roughly **≤ ~50 codes per sub-theme** when the batch is large).
 - Sub-theme names should be 2–5 words, more specific than "{cluster_label}".
-- Codes that do not clearly fit any sub-theme go in "ungrouped_codes".
 - Do NOT invent codes that are not in the list above.
 - Do NOT rename or alter any code — use the exact strings provided.
 

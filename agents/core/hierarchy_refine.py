@@ -8,7 +8,7 @@ Reads/writes the same gt_hierarchy.json schema with optional nested sub_themes:
 from __future__ import annotations
 
 import os
-from collections import Counter
+from collections import Counter, OrderedDict
 from typing import Any, Callable, Dict, List, Optional
 
 from .prompts import hierarchy_refine_bucket_prompt
@@ -22,12 +22,12 @@ def _truthy(v: str | None) -> bool:
 
 
 def _max_bucket() -> int:
-    raw = os.environ.get("GT_MAX_CODES_PER_BUCKET", "18").strip()
+    raw = os.environ.get("GT_MAX_CODES_PER_BUCKET", "48").strip()
     try:
         n = int(raw)
         return max(4, min(80, n))
     except ValueError:
-        return 18
+        return 48
 
 
 def _max_depth() -> int:
@@ -37,6 +37,20 @@ def _max_depth() -> int:
         return max(1, min(20, n))
     except ValueError:
         return 8
+
+
+def _llm_max_codes_per_call() -> int:
+    """
+    Max code lines per hierarchy_refine LLM request. Larger buckets are split into
+    consecutive batches; each batch is LLM-split separately, then sub-themes are
+    merged by normalized name (case-insensitive).
+    """
+    raw = os.environ.get("GT_HIERARCHY_REFINE_LLM_MAX_CODES", "48").strip()
+    try:
+        n = int(raw)
+        return max(8, min(200, n))
+    except ValueError:
+        return 48
 
 
 def _num_groups_for_split(n: int, cap: int) -> int:
@@ -83,13 +97,16 @@ def _validate_split(
     return normalized if normalized else None
 
 
-def _llm_split_bucket(
+def _llm_split_bucket_once(
     cluster_label: str,
     bucket_label: str,
     codes: List[str],
     research_question: str,
     invoke: Callable[[str, str], str],
 ) -> Optional[List[Dict[str, Any]]]:
+    """One LLM call; caller must keep len(codes) <= _llm_max_codes_per_call()."""
+    if not codes:
+        return None
     cap = _max_bucket()
     num_groups = _num_groups_for_split(len(codes), cap)
     bulleted = "\n".join(f"- {c}" for c in codes)
@@ -109,10 +126,82 @@ def _llm_split_bucket(
     if not validated:
         log_step("HIERARCHY_REFINE_VALIDATION", f"LLM split failed validation for {bucket_label!r}")
         return None
-    # Degenerate: single group with all codes -> force fallback
     if len(validated) == 1 and len(validated[0].get("codes", [])) == len(codes):
         return None
     return validated
+
+
+def _merge_group_lists(
+    ordered: "OrderedDict[str, Dict[str, Any]]", groups: List[Dict[str, Any]]
+) -> None:
+    """Merge {name, codes} into ordered (key = lower(name)), extending codes."""
+    for g in groups:
+        if not isinstance(g, dict):
+            continue
+        name = (g.get("name") or "Unnamed").strip() or "Unnamed"
+        key = name.lower()
+        raw_codes = g.get("codes")
+        if not isinstance(raw_codes, list):
+            continue
+        clean = [c for c in raw_codes if isinstance(c, str)]
+        if not clean:
+            continue
+        if key not in ordered:
+            ordered[key] = {"name": name, "codes": []}
+        ordered[key]["codes"].extend(clean)
+
+
+def _llm_split_bucket(
+    cluster_label: str,
+    bucket_label: str,
+    codes: List[str],
+    research_question: str,
+    invoke: Callable[[str, str], str],
+) -> Optional[List[Dict[str, Any]]]:
+    cap = _max_bucket()
+    llm_cap = _llm_max_codes_per_call()
+    n = len(codes)
+    if n <= llm_cap:
+        return _llm_split_bucket_once(
+            cluster_label, bucket_label, codes, research_question, invoke
+        )
+
+    n_batch = (n + llm_cap - 1) // llm_cap
+    log_step(
+        "HIERARCHY_REFINE_LLM_BATCH",
+        f"{bucket_label!r}: {n} codes in {n_batch} LLM batches (max {llm_cap} codes/call).",
+    )
+    merged: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
+    for bi in range(n_batch):
+        start = bi * llm_cap
+        batch = codes[start : start + llm_cap]
+        batch_label = f"{bucket_label} (batch {bi + 1}/{n_batch})"
+        got = _llm_split_bucket_once(
+            cluster_label, batch_label, batch, research_question, invoke
+        )
+        if not got:
+            fallback = _deterministic_leaves(batch, cap, f"{bucket_label} (batch {bi + 1})")
+            _merge_group_lists(merged, fallback)
+        else:
+            _merge_group_lists(merged, got)
+
+    combined: List[Dict[str, Any]] = [
+        {"name": v["name"], "codes": v["codes"]} for v in merged.values()
+    ]
+    if not combined:
+        return None
+    orig = Counter(codes)
+    seen = Counter(c for g in combined for c in g["codes"])
+    if seen != orig:
+        log_step(
+            "HIERARCHY_REFINE_VALIDATION",
+            f"Batched merge for {bucket_label!r}: code multiset mismatch (dropped/duplicated); "
+            f"expected {len(orig)} unique instances, got {len(seen)}.",
+        )
+        return None
+    if len(combined) == 1 and len(combined[0]["codes"]) == n:
+        return None
+    return combined
 
 
 def refine_leaf_bucket(
@@ -222,10 +311,11 @@ def refine_cluster_entry(
             )
 
     cap = _max_bucket()
+    overflow_bucket = f"Further themes ({label})"
     if len(ungrouped_str) > cap:
         extra = refine_leaf_bucket(
             label,
-            "Other codes",
+            overflow_bucket,
             ungrouped_str,
             research_question,
             0,

@@ -23,19 +23,15 @@ ensure_pipeline_python_deps
 
 
 # Override examples:
-#   export GT_DATA_CSV="$REPO_ROOT/data/school_burnout_text_review.csv"
 #   export GT_DATA_CSV="$REPO_ROOT/data/reddit_comment_text_1000.csv"
-GT_DATA_CSV="${GT_DATA_CSV:-$REPO_ROOT/data/reddit_comment_text_10000.csv}"
+GT_DATA_CSV="${GT_DATA_CSV:-$REPO_ROOT/data/school_burnout_text_review.csv}"
 
 MODEL_PATH="$AGENTS_ROOT/weights/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
 SERVER_LOG="$AGENTS_ROOT/server.log"
 PORT=8000
-# Research question — uncomment the one matching the active dataset.
-# RESEARCH_QUESTION="What do players dislike about games and software in these reviews?"
-# RESEARCH_QUESTION="What do users dislike or find frustrating about games and software in these reviews, and how do they describe those issues?"
-# RESEARCH_QUESTION="What thematic patterns appear in how people describe their experience with games and software in these reviews?"
-# RESEARCH_QUESTION="What thematic patterns appear in how students describe their experience of school and academic demands?"
-RESEARCH_QUESTION="How do Reddit commenters frame the severity of climate change and the possibility or impossibility of meaningful response?"
+# Research question — keep it broad so open coding stays inductive (avoid naming expected themes).
+# Override: RESEARCH_QUESTION="..." sbatch run.sh
+RESEARCH_QUESTION="What thematic patterns emerge across these reviews?"
 export RESEARCH_QUESTION
 
 # Stop SGLang reliably so GPU VRAM is freed before axial (embedding) and other steps.
@@ -318,6 +314,15 @@ stop_sglang_server "$REPORT_PID"
 if [ "$REPORT_STEP_EXIT" -ne 0 ]; then
     exit "$REPORT_STEP_EXIT"
 fi
+
+echo "Starting co-occurrence network (agents.cli --cooccurrence-only)..."
+python -m agents.cli --cooccurrence-only --research-question "$RESEARCH_QUESTION"
+COOCCURRENCE_EXIT=$?
+echo "Co-occurrence step finished with exit code $COOCCURRENCE_EXIT."
+if [ "$COOCCURRENCE_EXIT" -ne 0 ]; then
+    exit "$COOCCURRENCE_EXIT"
+fi
+
 if [ "${UPLOAD_TO_SUPABASE:-0}" = "1" ]; then
     echo "Uploading pipeline artifacts to Supabase (UPLOAD_TO_SUPABASE=1)..."
     export PIPELINE_SLUG="${PIPELINE_SLUG:-default}"

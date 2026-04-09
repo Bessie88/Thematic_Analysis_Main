@@ -4,9 +4,11 @@ import json
 import sys
 from pathlib import Path
 
+from agents.cooccurrence import write_cooccurrence
 from agents.core.paths import (
     CLUSTERED_CODES_PATH,
     CODEBOOK_PATH,
+    COOCCURRENCE_PATH,
     DEFAULT_DATA_CSV,
     GLOBAL_GRAPH_PATH,
     GT_CODES_ONLY_PATH,
@@ -56,11 +58,29 @@ def main() -> None:
         action="store_true",
         help="(Removed) Per-cluster graph step no longer exists; exits with instructions.",
     )
-    p.add_argument("--meta-themes-only", action="store_true", help="Run meta-theme grouping (group cluster labels into 4-5 meta-themes). LLM must be up.")
+    p.add_argument(
+        "--meta-themes-only",
+        action="store_true",
+        help="Run meta-theme grouping (group cluster labels into a small handful of meta-themes, ~3–7 when many clusters). LLM must be up.",
+    )
     p.add_argument("--tree-only", action="store_true", help="Run tree assembly (build hierarchical tree from meta-themes + hierarchy). No LLM needed.")
     p.add_argument("--global-graph-only", action="store_true", help="Alias for --tree-only (backward compat).")
     p.add_argument("--report-only", action="store_true", help="Generate research_report.md from gt_global_graph.json (Mistral/SGLang report server must be up).")
-    p.add_argument("--graph-path", default=None, help="Path to global graph JSON for --report-only (default: outputs/data/gt_global_graph.json).")
+    p.add_argument(
+        "--cooccurrence-only",
+        action="store_true",
+        help="Build gt_cooccurrence.json from gt_clustered_codes.json + gt_global_graph.json (no LLM).",
+    )
+    p.add_argument(
+        "--graph-path",
+        default=None,
+        help="Path to global graph JSON for --report-only / --cooccurrence-only (default: outputs/data/gt_global_graph.json).",
+    )
+    p.add_argument(
+        "--clustered-path",
+        default=None,
+        help="Path to gt_clustered_codes.json for --cooccurrence-only (default: outputs/data/gt_clustered_codes.json).",
+    )
     p.add_argument("--report-api-base", default=None, help="OpenAI-compatible API base for report (default: env REPORT_OPENAI_BASE or http://localhost:8000/v1).")
     p.add_argument("--report-model", default=None, help="Model name for report (default: env REPORT_MODEL_NAME or llm).")
     p.add_argument("--skip-cross-cluster", action="store_true", help="(Deprecated, ignored) Cross-cluster linking removed in tree mode.")
@@ -167,6 +187,33 @@ def main() -> None:
             model=args.report_model,
         )
         log_step("RESEARCH_REPORT_COMPLETE", f"Wrote {display_path(RESEARCH_REPORT_PATH)}")
+        raise SystemExit(0)
+
+    if args.cooccurrence_only:
+        graph_file = Path(args.graph_path) if args.graph_path else GLOBAL_GRAPH_PATH
+        clustered_file = Path(args.clustered_path) if args.clustered_path else CLUSTERED_CODES_PATH
+        if not clustered_file.is_file():
+            print(
+                f"Error: {clustered_file} not found. Run axial (and refine) so codes_per_review exists.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        if not graph_file.is_file():
+            print(
+                f"Error: {graph_file} not found. Run tree assembly first (or pass --graph-path).",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        try:
+            meta = write_cooccurrence(clustered_file, graph_file, COOCCURRENCE_PATH)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            raise SystemExit(1)
+        sk = meta.get("skipped_unmapped_codes", 0)
+        log_step(
+            "COOCCURRENCE_COMPLETE",
+            f"Wrote {display_path(COOCCURRENCE_PATH)} (skipped unmapped codes in reviews: {sk})",
+        )
         raise SystemExit(0)
 
     if args.axial_only:

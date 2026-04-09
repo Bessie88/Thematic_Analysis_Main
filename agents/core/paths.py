@@ -14,12 +14,14 @@ REVIEW_TEXT_ENGLISH_1000_CSV = AGENTS_DIR.parent / "data" / "review_text_english
 
 REDDIT_COMMENT_TEXT_1000_CSV = AGENTS_DIR.parent / "data" / "reddit_comment_text_1000.csv"
 REDDIT_COMMENT_TEXT_10000_CSV = AGENTS_DIR.parent / "data" / "reddit_comment_text_10000.csv"
+REDDIT_COMMENT_TEXT_3000_CSV = AGENTS_DIR.parent / "data" / "reddit_comment_text_3000.csv"
 
-DEFAULT_DATA_CSV = REDDIT_COMMENT_TEXT_10000_CSV
+DEFAULT_DATA_CSV = SCHOOL_BURNOUT_TEXT_CSV
 
 # DEFAULT_DATA_CSV = REDDIT_COMMENT_TEXT_1000_CSV
+# DEFAULT_DATA_CSV = REDDIT_COMMENT_TEXT_3000_CSV
+# DEFAULT_DATA_CSV = REDDIT_COMMENT_TEXT_10000_CSV
 # DEFAULT_DATA_CSV = REVIEW_TEXT_ENGLISH_1000_CSV
-# DEFAULT_DATA_CSV = SCHOOL_BURNOUT_TEXT_CSV
 # DEFAULT_DATA_CSV = AGENTS_DIR.parent / "data" / "review_text_english_50k.csv"
 
 GT_CODES_ONLY_PATH = DATA_DIR / "gt_codes_only.json"
@@ -32,6 +34,7 @@ CROSS_CLUSTER_EDGES_PATH = DATA_DIR / "gt_cross_cluster_edges.jsonl"
 META_THEMES_PATH = DATA_DIR / "gt_meta_themes.json"
 GLOBAL_GRAPH_PATH = DATA_DIR / "gt_global_graph.json"
 CLEANED_GLOBAL_GRAPH_PATH = DATA_DIR / "gt_global_graph_cleaned.json"
+COOCCURRENCE_PATH = DATA_DIR / "gt_cooccurrence.json"
 RESEARCH_REPORT_PATH = DATA_DIR / "research_report.md"
 
 # Mistral 7B Instruct v0.3 for post-pipeline research report (SGLang --model-path).

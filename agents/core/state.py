@@ -217,6 +217,13 @@ def tool_node(state: GTState):
     updates = {"tool_call": None}  # always clear so router doesn't re-dispatch
 
     if tool_name == "open_coding":
+        # Empty model output would skip validation and re-dispatch open_coding forever
+        if not clean_output.strip():
+            clean_output = (
+                "- Applicability: NONE\n"
+                "  Reason: Coder returned no text; cannot validate substantive codes.\n"
+                "  Evidence: \"(empty output)\"\n"
+            )
         updates["open_codes"] = clean_output
     elif tool_name == "validate_open_codes":
         verdict, feedback = _parse_validation_output(clean_output)
