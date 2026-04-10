@@ -1,8 +1,8 @@
-"""LLM setup and all GT pipeline tools (open coding, axial, hierarchy, graph, etc.)."""
+"""LangChain tools and helpers for the grounded-theory pipeline (coding through tree assembly)."""
 import json
 import os
 import re
-from collections import Counter, defaultdict
+from collections import defaultdict
 from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
@@ -38,7 +38,6 @@ from .utils import clean_and_parse_json, log_step, remove_think_tags
 # Refine step: only offer the K most similar cluster labels as MOVE targets (embedding cosine).
 REFINE_TOP_K_OTHER_CLUSTERS = 5
 
-# Chunk sizes for LLM calls (context limits); see agents/docs/PIPELINE.md
 _EMBED_DRAIN_THRESHOLD = 20
 
 
@@ -165,12 +164,6 @@ def _normalize_meta_theme_count(meta_themes: List[Dict[str, Any]], n_cids: int) 
     return mt
 
 
-# 2. LLM Setup (vLLM)
-# ==================================================
-# Set a conservative completion token budget to avoid exceeding model context.
-# We'll request at most `COMPLETION_TOKENS` for the model's response and
-# ensure input text is truncated so input_tokens + COMPLETION_TOKENS <= CONTEXT_TOKENS.
-CONTEXT_TOKENS = 8000
 COMPLETION_TOKENS = 1024
 
 llm = ChatOpenAI(
@@ -181,17 +174,12 @@ llm = ChatOpenAI(
     max_tokens=COMPLETION_TOKENS,
 )
 
-# ==================================================
-# 3. Grounded Theory Tools (The Cognitive Steps)
-# ==================================================
 
 @tool
 def open_coding(text: str, research_question: str, validator_feedback: Optional[str] = None) -> str:
     """
-    Step 1: Open Coding (per review).
-    Extract 0–3 reusable constructs grounded in the text and the research question.
-    Use Applicability NONE when the review offers nothing relevant to the question.
-    If validator_feedback is provided, use it to improve the previous attempt.
+    Open coding for one text unit: induce 0–3 codes aligned with the research question.
+    Use Applicability NONE when irrelevant; if validator_feedback is set, revise the prior attempt.
     """
     prompt = open_coding_prompt(research_question, text, validator_feedback=validator_feedback)
     return llm_invoke_with_skill(llm, "open_coding", prompt)
@@ -199,22 +187,13 @@ def open_coding(text: str, research_question: str, validator_feedback: Optional[
 
 @tool
 def validate_open_codes(text: str, generated_codes: str, research_question: str) -> str:
-    """
-    Review open coding output for one review (including Applicability NONE when no codes).
-    Return PASS or FAIL and, if FAIL, list issues so the generator can improve.
-    """
+    """Validate one open-coding result; respond PASS or FAIL with actionable feedback."""
     prompt = validate_open_codes_prompt(research_question, text, generated_codes)
     return llm_invoke_with_skill(llm, "validate_open_codes", prompt)
 
 
 def _deduplicate_codes(all_codes: List[str], model_name: str, near_dup_threshold: float = 0.95) -> tuple:
-    """
-    Deduplicate codes in two passes:
-    1. Exact dedup: normalize (lowercase, strip) and keep first occurrence.
-    2. Near-duplicate dedup: embed unique codes, merge pairs with cosine >= threshold via union-find.
-    Returns (deduped_codes, original_to_canonical_map).
-    """
-    # Pass 1: exact dedup (case-insensitive, stripped)
+    """Exact dedup then embedding-based near-dup merge; returns (deduped list, original→canonical map)."""
     norm_to_canonical: Dict[str, str] = {}
     for code in all_codes:
         normed = code.strip().lower()
@@ -226,7 +205,6 @@ def _deduplicate_codes(all_codes: List[str], model_name: str, near_dup_threshold
         orig_map = {c: c.strip() for c in all_codes}
         return unique_codes, orig_map
 
-    # Pass 2: near-duplicate dedup via embedding + union-find
     model = SentenceTransformer(model_name)
     embeddings = model.encode(unique_codes, batch_size=64, show_progress_bar=False, normalize_embeddings=True)
     embeddings = np.asarray(embeddings, dtype=np.float32)
@@ -250,7 +228,6 @@ def _deduplicate_codes(all_codes: List[str], model_name: str, near_dup_threshold
             if sim_matrix[i][j] >= near_dup_threshold:
                 union(i, j)
 
-    # Build canonical mapping: each group maps to the first (canonical) member
     root_to_canonical: Dict[int, str] = {}
     for i in range(len(unique_codes)):
         root = find(i)
@@ -259,7 +236,6 @@ def _deduplicate_codes(all_codes: List[str], model_name: str, near_dup_threshold
 
     deduped = sorted(set(root_to_canonical.values()))
 
-    # Build original -> canonical map
     idx_map = {unique_codes[i]: root_to_canonical[find(i)] for i in range(len(unique_codes))}
     orig_map: Dict[str, str] = {}
     for code in all_codes:
@@ -271,18 +247,13 @@ def _deduplicate_codes(all_codes: List[str], model_name: str, near_dup_threshold
 
 
 def _axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str = str(DATA_DIR)) -> str:
-    """
-    Step 2: Axial Coding (embed + K-means).
-    Embeds all codes, clusters them, returns a text summary of cluster -> codes.
-    Uses same logic as embed_and_cluster.py (LOGOS-style).
-    """
+    """Embed codes, pick K via silhouette, cluster with K-means/MiniBatch; write gt_clustered_codes.json."""
     MINIBATCH_SIZE = 1000
     K_MIN, K_MAX_DIVISOR = 5, 3
 
     if not all_codes:
         return "No codes to cluster."
 
-    # Deduplicate codes before clustering
     original_count = len(all_codes)
     deduped_codes, dedup_map = _deduplicate_codes(all_codes, model_name)
     log_step("DEDUP", f"Reduced {original_count} codes to {len(deduped_codes)} unique codes")
@@ -293,7 +264,6 @@ def _axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str
 
     n = len(embeddings)
     if n < K_MIN:
-        # Not enough unique codes to cluster meaningfully
         cluster_to_codes_out = {"0": deduped_codes}
         out = {"all_codes": deduped_codes, "labels": [0] * n, "k": 1, "cluster_to_codes": cluster_to_codes_out, "dedup_map": dedup_map}
         os.makedirs(out_dir, exist_ok=True)
@@ -324,8 +294,6 @@ def _axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str
     for code, label in zip(deduped_codes, labels):
         cluster_to_codes[int(label)].append(code)
 
-    # Preserve codes_per_review from gt_codes_only.json so codebook_cleanup can compute datapoint frequency
-    # Map original codes to their canonical (deduped) forms
     codes_per_review = []
     codes_only_path = os.path.join(out_dir, "gt_codes_only.json")
     if os.path.isfile(codes_only_path):
@@ -333,7 +301,6 @@ def _axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str
             with open(codes_only_path, encoding="utf-8") as f:
                 codes_only_data = json.load(f)
             raw_cpr = codes_only_data.get("codes_per_review", [])
-            # Each item is [review_id, [code, ...]] — not a flat list of codes
             for item in raw_cpr:
                 if not isinstance(item, (list, tuple)) or len(item) < 2:
                     continue
@@ -358,7 +325,7 @@ def _axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str
         "labels": labels.tolist(),
         "k": best_k,
         "cluster_to_codes": {str(i): codes for i, codes in sorted(cluster_to_codes.items())},
-        "dedup_map": dedup_map,  # traceability: original -> canonical
+        "dedup_map": dedup_map,
     }
     if codes_per_review:
         out["codes_per_review"] = codes_per_review
@@ -378,11 +345,7 @@ def _axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str
 
 @tool
 def axial_coding(open_codes: str) -> str:
-    """
-    Step 2: Axial Coding (embed + K-means).
-    Input: JSON array of code strings (from all reviews).
-    Embeds codes, clusters with K-means (K from Silhouette), returns cluster summary.
-    """
+    """Axial step: JSON array of code strings → embed, K-means, write clusters; returns a text summary."""
     try:
         all_codes = json.loads(open_codes)
     except json.JSONDecodeError:
@@ -392,7 +355,6 @@ def axial_coding(open_codes: str) -> str:
     model_name = os.environ.get("GT_EMBED_MODEL") or (
         str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B") if os.path.isdir(str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B")) else "Qwen/Qwen3-Embedding-0.6B"
     )
-    # Use absolute path so SentenceTransformer loads from disk only (no HF lookup; compute nodes often have no network)
     if os.path.isdir(model_name):
         model_name = os.path.abspath(model_name)
         os.environ["HF_HUB_OFFLINE"] = "1"
@@ -402,9 +364,8 @@ def axial_coding(open_codes: str) -> str:
 @tool
 def high_level_code_generation(cluster_file: str = str(CLUSTERED_CODES_PATH), research_question: str = "") -> str:
     """
-    Step 2b: High-level code generation (final part of axial).
-    Reads cluster_to_codes from disk, prompts LLM once per cluster for a label, confidence (1-5), and rationale.
-    Writes codebook.json (labels only, for downstream) and codebook_confidence.json (full objects). Returns codebook as JSON string.
+    One LLM call per cluster: label, confidence (1–5), rationale.
+    Writes codebook.json and codebook_confidence.json; returns codebook JSON.
     """
     if not os.path.isfile(cluster_file):
         return json.dumps({"error": f"Missing {cluster_file}; run axial step first."})
@@ -416,7 +377,6 @@ def high_level_code_generation(cluster_file: str = str(CLUSTERED_CODES_PATH), re
     out_dir = os.path.dirname(cluster_file) or "."
     out_path = os.path.join(out_dir, "codebook.json")
     confidence_path = os.path.join(out_dir, "codebook_confidence.json")
-    # Resume: load existing codebook if present so we can skip already-done clusters (e.g. after SGLang died)
     codebook = {}
     codebook_confidence: Dict[str, Dict[str, Any]] = {}
     if os.path.isfile(out_path):
@@ -434,7 +394,6 @@ def high_level_code_generation(cluster_file: str = str(CLUSTERED_CODES_PATH), re
             codebook_confidence = {}
 
     for cid, codes in sorted(cluster_to_codes.items(), key=lambda x: int(x[0])):
-        # Resume: skip if both codebook and confidence have this cluster; if codebook has it but confidence doesn't, backfill
         if cid in codebook:
             if cid not in codebook_confidence:
                 codebook_confidence[cid] = {"label": codebook[cid], "confidence": 1, "rationale": ""}
@@ -475,7 +434,6 @@ def high_level_code_generation(cluster_file: str = str(CLUSTERED_CODES_PATH), re
                 log_step("HIGH_LEVEL_LLM_ERROR", f"Cluster {cid}: {e}")
                 codebook[cid] = f"Cluster {cid}"
                 codebook_confidence[cid] = {"label": codebook[cid], "confidence": 1, "rationale": ""}
-        # Save after each cluster so we can resume if SGLang dies mid-run
         with open(out_path, "w", encoding="utf-8") as f:
             json.dump({"codebook": codebook, "cluster_to_codes": cluster_to_codes}, f, indent=2)
         with open(confidence_path, "w", encoding="utf-8") as f:
@@ -486,9 +444,7 @@ def high_level_code_generation(cluster_file: str = str(CLUSTERED_CODES_PATH), re
 @tool
 def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
     """
-    After high-level labels exist, review each cluster and move codes that clearly belong in another cluster.
-    Reads codebook.json and gt_clustered_codes.json, asks LLM per cluster for MOVE commands (code -> target label),
-    applies moves, removes empty clusters, writes back gt_clustered_codes.json. Returns summary of moves applied.
+    LLM-suggested MOVEs between clusters; rekeys clusters and syncs codebook / confidence / hierarchy keys.
     """
     if not os.path.isfile(codebook_path):
         return f"Error: codebook not found at {codebook_path}"
@@ -503,12 +459,11 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
     all_codes = data.get("all_codes", [])
     codes_per_review = data.get("codes_per_review", [])
 
-    # label -> list of cids (for ambiguous label check)
     label_to_cids: Dict[str, List[str]] = defaultdict(list)
     for cid, label in codebook.items():
         label_to_cids[label].append(cid)
 
-    moves_applied: List[tuple] = []  # (code, from_cid, to_cid)
+    moves_applied: List[tuple] = []
 
     sorted_oids = sorted(cluster_to_codes.keys(), key=lambda x: int(x))
     if not sorted_oids:
@@ -548,7 +503,6 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
         if k_take <= 0:
             other_str = "(none)"
         else:
-            # Top-k by cosine similarity (descending)
             part = np.argpartition(-sims, k_take - 1)[:k_take]
             top_positions = part[np.argsort(-sims[part])]
             other_labels = [label_texts[j] for j in top_positions]
@@ -597,7 +551,6 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
                     continue
                 moves_applied.append((code, cid, target_cid))
 
-    # Deduplicate: keep first move per code, warn on conflict (e.g. A->B and B->C for same code)
     seen_codes: Dict[str, tuple] = {}
     deduped_moves: List[tuple] = []
     for move in moves_applied:
@@ -609,7 +562,6 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
             deduped_moves.append(move)
     moves_applied = deduped_moves
 
-    # Apply moves: build code -> cid, then update
     code_to_cid: Dict[str, str] = {}
     for cid, codes in cluster_to_codes.items():
         for c in codes:
@@ -618,11 +570,9 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
         if code in code_to_cid:
             code_to_cid[code] = to_cid
 
-    # Rebuild cluster_to_codes from code_to_cid
     new_cluster_to_codes: Dict[str, List[str]] = defaultdict(list)
     for code, cid in code_to_cid.items():
         new_cluster_to_codes[cid].append(code)
-    # Remove empty clusters and rekey to contiguous 0..k_new-1
     non_empty = {cid: codes for cid, codes in new_cluster_to_codes.items() if codes}
     cid_list = sorted(non_empty.keys(), key=int)
     new_cluster_to_codes = {str(i): non_empty[cid_list[i]] for i in range(len(cid_list))}
@@ -640,11 +590,9 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
     os.makedirs(os.path.dirname(cluster_file) or ".", exist_ok=True)
     with open(cluster_file, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2)
-    # Keep codebook.json in sync: rekey codebook to new cluster ids 0..k_new-1
     new_codebook = {str(i): codebook.get(cid_list[i], f"Cluster {cid_list[i]}") for i in range(len(cid_list))}
     with open(codebook_path, "w", encoding="utf-8") as f:
         json.dump({"codebook": new_codebook, "cluster_to_codes": new_cluster_to_codes}, f, indent=2)
-    # Rekey codebook_confidence.json so keys match new cluster ids 0..k_new-1
     confidence_path = os.path.join(os.path.dirname(codebook_path) or ".", "codebook_confidence.json")
     codebook_confidence_rekeyed: Dict[str, Dict[str, Any]] = {}
     if os.path.isfile(confidence_path):
@@ -665,7 +613,6 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
     with open(confidence_path, "w", encoding="utf-8") as f:
         json.dump(codebook_confidence_rekeyed, f, indent=2)
 
-    # Drop hierarchy entries for cluster IDs that no longer exist after rekey
     hier_path = str(HIERARCHY_PATH)
     if os.path.isfile(hier_path):
         try:
@@ -690,10 +637,7 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
 
 @tool
 def meta_theme_grouping(research_question: str = "") -> str:
-    """
-    Step 5a (LOGOS): Group cluster labels into a small handful of broad meta-themes (about 3–7 when many clusters).
-    Reads codebook.json, asks LLM to group all cluster labels, writes gt_meta_themes.json.
-    """
+    """Group cluster labels into a bounded set of meta-themes; writes gt_meta_themes.json."""
     codebook_path = str(CODEBOOK_PATH)
     if not os.path.isfile(codebook_path):
         return json.dumps({"error": "Missing codebook.json; run high-level step first."})
@@ -784,13 +728,11 @@ def meta_theme_grouping(research_question: str = "") -> str:
         f"See {display_path(META_THEMES_PATH)}"
     )
     return summary
+
+
 @tool
 def hierarchy_construction(research_question: str = "") -> str:
-    """
-    Step 5b (LOGOS): Intra-cluster sub-theme grouping.
-    For each cluster: ask the LLM to organise codes into 2-5 sub-themes.
-    Writes gt_hierarchy.json in tree format (no pairwise edges, no transitive closure).
-    """
+    """Intra-cluster sub-themes (LLM + optional batched assign + embed drain); writes gt_hierarchy.json."""
     codebook_path = str(CODEBOOK_PATH)
     if not os.path.isfile(codebook_path):
         return json.dumps({"error": "Missing codebook.json; run high-level step first."})
@@ -801,7 +743,6 @@ def hierarchy_construction(research_question: str = "") -> str:
     if not cluster_to_codes:
         return json.dumps({"error": "No cluster_to_codes in codebook.json."})
 
-    # Resume: load existing hierarchy if present
     existing_hierarchy: Dict[str, Any] = {}
     if os.path.isfile(str(HIERARCHY_PATH)):
         try:
@@ -829,7 +770,6 @@ def hierarchy_construction(research_question: str = "") -> str:
         label = codebook.get(cid, f"Cluster {cid}")
         unique_codes = list(dict.fromkeys(codes))
 
-        # Small clusters: all codes are direct children, no sub-theming needed
         if len(unique_codes) <= 5:
             hierarchy[cid] = {
                 "label": label,
@@ -840,8 +780,6 @@ def hierarchy_construction(research_question: str = "") -> str:
             _save_hierarchy(hierarchy)
             continue
 
-        # For large clusters, batch codes to avoid exceeding context window
-        # Send up to 60 codes at a time; if more, do a second pass to assign extras
         BATCH_SIZE = 60
         if len(unique_codes) <= BATCH_SIZE:
             codes_for_prompt = unique_codes
@@ -856,7 +794,6 @@ def hierarchy_construction(research_question: str = "") -> str:
             parsed = clean_and_parse_json(raw)
         except Exception as e:
             log_step("HIERARCHY_LLM_ERROR", f"Cluster {cid}: {e}")
-            # Fallback: all codes as ungrouped
             hierarchy[cid] = {
                 "label": label,
                 "sub_themes": [],
@@ -868,7 +805,6 @@ def hierarchy_construction(research_question: str = "") -> str:
         sub_themes = parsed.get("sub_themes", [])
         ungrouped = parsed.get("ungrouped_codes", [])
 
-        # Validate: ensure all codes are accounted for
         assigned_codes: set = set()
         validated_sub_themes: List[Dict[str, Any]] = []
         for st in sub_themes:
@@ -882,11 +818,9 @@ def hierarchy_construction(research_question: str = "") -> str:
         validated_ungrouped = [c for c in ungrouped if c in set(codes_for_prompt) and c not in assigned_codes]
         assigned_codes.update(validated_ungrouped)
 
-        # Any codes the LLM missed go to ungrouped
         missing = [c for c in codes_for_prompt if c not in assigned_codes]
         validated_ungrouped.extend(missing)
 
-        # If we batched, assign remaining codes in chunks (avoids one giant assign prompt)
         if len(unique_codes) > BATCH_SIZE:
             remaining = unique_codes[BATCH_SIZE:]
             st_names = [st["name"] for st in validated_sub_themes]
@@ -956,7 +890,7 @@ def hierarchy_construction(research_question: str = "") -> str:
 
 
 def _save_hierarchy(hierarchy: Dict[str, Any]) -> None:
-    """Persist hierarchy to disk (called after each cluster for resume support)."""
+    """Write gt_hierarchy.json after each cluster (resume-friendly)."""
     ensure_output_dirs()
     with open(HIERARCHY_PATH, "w", encoding="utf-8") as f:
         json.dump(hierarchy, f, indent=2)
@@ -968,7 +902,7 @@ def _build_sub_theme_node(
     edges: List[Dict[str, str]],
     all_nodes: List[str],
 ) -> Dict[str, Any]:
-    """Build a sub_theme tree node; supports nested sub_themes (post hierarchy_refine)."""
+    """Recursively build a sub_theme node (including nested sub_themes from refinement)."""
     st_name = st.get("name", "Unnamed")
     edges.append({"parent": parent_name, "child": st_name})
     all_nodes.append(st_name)
@@ -990,7 +924,6 @@ def _build_sub_theme_node(
 def _assign_codes_to_subthemes_prompt(
     cluster_label: str, sub_theme_names: List[str], codes: List[str], research_question: str
 ) -> str:
-    """Prompt to assign overflow codes to existing sub-themes."""
     st_list = "\n".join(f"- {name}" for name in sub_theme_names)
     codes_list = "\n".join(f"- {c}" for c in codes)
     rq_line = f"\nResearch Question: {research_question}\n" if research_question else ""
@@ -1011,10 +944,8 @@ Output ONLY valid JSON:
 @tool
 def tree_assembly(research_question: str = "") -> str:
     """
-    Step 6 (LOGOS): Tree assembly.
-    Read gt_meta_themes.json and gt_hierarchy.json, optionally refine hierarchy to cap code fan-out
-    (GT_HIERARCHY_REFINE, rewrites gt_hierarchy.json), then build a hierarchical tree with nested
-    sub_themes, write gt_global_graph.json with tree structure and flat edge list.
+    Merge meta-themes + hierarchy into gt_global_graph.json (tree + flat edges).
+    Runs maybe_refine_hierarchy (env GT_HIERARCHY_REFINE) and may rewrite gt_hierarchy.json.
     """
     if not os.path.isfile(str(META_THEMES_PATH)):
         return json.dumps({"error": "Missing gt_meta_themes.json; run meta_theme_grouping step first."})
@@ -1043,11 +974,9 @@ def tree_assembly(research_question: str = "") -> str:
 
     meta_themes = meta_data.get("meta_themes", [])
 
-    # Build tree structure
     root_name = research_question or "Thematic Analysis"
     tree: Dict[str, Any] = {"name": root_name, "type": "root", "children": []}
 
-    # Also build flat edge list for backward compatibility
     edges: List[Dict[str, str]] = []
     all_nodes: List[str] = [root_name]
 
@@ -1067,12 +996,10 @@ def tree_assembly(research_question: str = "") -> str:
             edges.append({"parent": mt_name, "child": label})
             all_nodes.append(label)
 
-            # Sub-themes (flat or nested after hierarchy_refine)
             for st in cluster_entry.get("sub_themes", []):
                 if isinstance(st, dict):
                     theme_node["children"].append(_build_sub_theme_node(st, label, edges, all_nodes))
 
-            # Ungrouped codes: direct children of the theme
             for code in cluster_entry.get("ungrouped_codes", []):
                 theme_node["children"].append({"name": code, "type": "code"})
                 edges.append({"parent": label, "child": code})
