@@ -1,4 +1,0 @@
-# Python deps for agents GT pipeline inside the Apptainer image (run.sh / launch_sgl.sh).
-# Pins kept in the 0.3.x core line to avoid langsmith/zstandard build issues on some HPC login nodes.
-langchain-core>=0.3.0,<0.4.0
-langchain-openai>=0.2.0,<0.4.0
