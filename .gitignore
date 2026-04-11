@@ -28,6 +28,7 @@ data/
 .cursor/
 dummy/
 .kaggle/
+docs/
 
 agents/report_server.log
 
