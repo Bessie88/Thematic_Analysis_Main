@@ -4,7 +4,7 @@ import json
 import sys
 from pathlib import Path
 
-from agents.cooccurrence import write_cooccurrence
+from agents.core.cooccurrence import write_cooccurrence
 from agents.core.paths import (
     CLUSTERED_CODES_PATH,
     CODEBOOK_PATH,
