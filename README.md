@@ -11,5 +11,6 @@
 ![Overall scores](artifacts/Overall_scores.png)
 
 ## per-Class Scores
+![per-Class Scores](artifacts/per_class_res.png)
 
 
