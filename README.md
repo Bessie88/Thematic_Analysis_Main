@@ -3,7 +3,7 @@
 ![GT Pipeline Diagram](artifacts/GT%20Pipeline%20Diagram.svg)
 
 # Validation
-
+![Theme Recovery Evaluation](artifacts/Theme%20Recovery%20Evaluation%20Overview.svg)
 ## Results:
 ![Confusion Matrix](artifacts/conf_matrix.png)
 
