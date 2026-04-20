@@ -33,8 +33,3 @@ We compare predicted theme assignments to a reference codebook on the evaluation
 ![per-Class Scores](artifacts/per_class_res.png)
 
 ---
-
-## Artifacts and evaluation
-
-- **Figures in `artifacts/`** are checked in for quick viewing in GitHub or internal docs; regenerate them from the evaluation notebooks or scripts when you refresh data or metrics.
-- **Notebook-based evaluation** for theme recovery lives in `evaluation/theme_recovery_eval.ipynb`; keep this README in sync when you rename metrics or file paths so the links above stay valid.
