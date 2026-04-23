@@ -1,0 +1,13 @@
+# Pipeline Python dependencies — LangChain / LangGraph stack.
+#
+# The Apptainer image (pytorch-langgraph-sgl.sif) already contains:
+#   torch, sglang, numpy, pandas, scikit-learn, sentence-transformers
+#
+# This file covers the LangChain stack, which may not be baked
+# into the container. launch_sgl.sh installs these at runtime (--user)
+# if they are not already importable inside the container.
+
+langchain-core>=0.3
+langchain-openai>=0.3
+langgraph>=0.3
+openai>=1.0
