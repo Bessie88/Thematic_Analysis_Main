@@ -167,7 +167,7 @@ def generate_research_report(
         max_tokens=max_tokens,
     )
     prompt = research_report_prompt(research_question, graph_text)
-    raw = llm_invoke_with_skill(llm, "research_report", prompt) or ""
+    raw = llm_invoke_with_skill(llm, "research_report", prompt, phase="report") or ""
     cleaned = remove_think_tags(raw)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

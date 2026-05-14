@@ -15,6 +15,7 @@ from .tools import (
     tree_assembly,
     validate_open_codes,
 )
+from . import utils as _utils
 from .utils import log_step, remove_think_tags
 
 # Max retries when validator returns FAIL (open coding)
@@ -209,7 +210,13 @@ def tool_node(state: GTState):
     call = state["tool_call"]
     tool_name = call["tool"]
 
-    raw_output = TOOLS[tool_name].invoke(call["args"])
+    _utils._active_tool = tool_name
+    _utils._active_step = state.get("step")
+    try:
+        raw_output = TOOLS[tool_name].invoke(call["args"])
+    finally:
+        _utils._active_tool = None
+        _utils._active_step = None
     clean_output = remove_think_tags(raw_output)
 
     log_step(f"TOOL_OUTPUT ({tool_name})", clean_output)
