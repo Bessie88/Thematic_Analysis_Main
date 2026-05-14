@@ -36,6 +36,7 @@ GLOBAL_GRAPH_PATH = DATA_DIR / "gt_global_graph.json"
 CLEANED_GLOBAL_GRAPH_PATH = DATA_DIR / "gt_global_graph_cleaned.json"
 COOCCURRENCE_PATH = DATA_DIR / "gt_cooccurrence.json"
 RESEARCH_REPORT_PATH = DATA_DIR / "research_report.md"
+LLM_USAGE_PATH = DATA_DIR / "gt_llm_usage.jsonl"
 
 # Mistral 7B Instruct v0.3 for post-pipeline research report (SGLang --model-path).
 MISTRAL_INSTRUCT_WEIGHTS_DIR = WEIGHTS_DIR / "Mistral-7B-Instruct-v0.3"

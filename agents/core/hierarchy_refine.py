@@ -102,7 +102,8 @@ def _llm_split_bucket_once(
     bucket_label: str,
     codes: List[str],
     research_question: str,
-    invoke: Callable[[str, str], str],
+    invoke: Callable[..., str],
+    depth: int = 0,
 ) -> Optional[List[Dict[str, Any]]]:
     """One LLM call; caller must keep len(codes) <= _llm_max_codes_per_call()."""
     if not codes:
@@ -114,7 +115,14 @@ def _llm_split_bucket_once(
         cluster_label, bucket_label, bulleted, research_question, num_groups
     )
     try:
-        raw = invoke("hierarchy_refine", prompt)
+        raw = invoke(
+            "hierarchy_refine",
+            prompt,
+            phase="hierarchy_refine",
+            cluster_label=cluster_label,
+            bucket_label=bucket_label,
+            depth=depth,
+        )
         parsed = clean_and_parse_json(raw)
     except Exception as e:
         log_step("HIERARCHY_REFINE_LLM", f"parse/call error for {bucket_label!r}: {e}")
@@ -156,14 +164,15 @@ def _llm_split_bucket(
     bucket_label: str,
     codes: List[str],
     research_question: str,
-    invoke: Callable[[str, str], str],
+    invoke: Callable[..., str],
+    depth: int = 0,
 ) -> Optional[List[Dict[str, Any]]]:
     cap = _max_bucket()
     llm_cap = _llm_max_codes_per_call()
     n = len(codes)
     if n <= llm_cap:
         return _llm_split_bucket_once(
-            cluster_label, bucket_label, codes, research_question, invoke
+            cluster_label, bucket_label, codes, research_question, invoke, depth=depth
         )
 
     n_batch = (n + llm_cap - 1) // llm_cap
@@ -177,7 +186,7 @@ def _llm_split_bucket(
         batch = codes[start : start + llm_cap]
         batch_label = f"{bucket_label} (batch {bi + 1}/{n_batch})"
         got = _llm_split_bucket_once(
-            cluster_label, batch_label, batch, research_question, invoke
+            cluster_label, batch_label, batch, research_question, invoke, depth=depth
         )
         if not got:
             fallback = _deterministic_leaves(batch, cap, f"{bucket_label} (batch {bi + 1})")
@@ -210,7 +219,7 @@ def refine_leaf_bucket(
     codes: List[str],
     research_question: str,
     depth: int,
-    invoke: Callable[[str, str], str],
+    invoke: Callable[..., str],
 ) -> Dict[str, Any]:
     """
     Return a sub_theme dict (leaf with codes, or internal with nested sub_themes).
@@ -229,7 +238,7 @@ def refine_leaf_bucket(
         return {"name": bucket_label, "codes": codes}
 
     groups = _llm_split_bucket(
-        cluster_label, bucket_label, codes, research_question, invoke
+        cluster_label, bucket_label, codes, research_question, invoke, depth=depth
     )
     if not groups:
         leaves = _deterministic_leaves(codes, cap, bucket_label)
@@ -255,7 +264,7 @@ def refine_sub_theme_node(
     cluster_label: str,
     research_question: str,
     depth: int,
-    invoke: Callable[[str, str], str],
+    invoke: Callable[..., str],
 ) -> Dict[str, Any]:
     """Normalize one sub_theme entry; support legacy flat {name, codes} and nested sub_themes."""
     name = (st.get("name") or "Unnamed").strip() or "Unnamed"
@@ -292,7 +301,7 @@ def refine_cluster_entry(
     entry: Dict[str, Any],
     cluster_label: str,
     research_question: str,
-    invoke: Callable[[str, str], str],
+    invoke: Callable[..., str],
 ) -> Dict[str, Any]:
     label = entry.get("label", cluster_label)
     sub_themes_in = entry.get("sub_themes")
@@ -334,7 +343,7 @@ def refine_cluster_entry(
 def refine_hierarchy_json(
     hierarchy: Dict[str, Any],
     research_question: str,
-    invoke: Callable[[str, str], str],
+    invoke: Callable[..., str],
 ) -> Dict[str, Any]:
     """Return a new hierarchy dict with fan-out capped (ungrouped merged into sub_themes)."""
     out: Dict[str, Any] = {}
@@ -351,7 +360,7 @@ def refine_hierarchy_json(
 def maybe_refine_hierarchy(
     hierarchy: Dict[str, Any],
     research_question: str,
-    invoke: Callable[[str, str], str],
+    invoke: Callable[..., str],
 ) -> Dict[str, Any]:
     if not _truthy(os.environ.get("GT_HIERARCHY_REFINE", "1")):
         log_step("HIERARCHY_REFINE", "skipped (GT_HIERARCHY_REFINE not truthy)")

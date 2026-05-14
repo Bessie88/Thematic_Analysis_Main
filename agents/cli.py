@@ -13,6 +13,7 @@ from agents.core.paths import (
     GLOBAL_GRAPH_PATH,
     GT_CODES_ONLY_PATH,
     HIERARCHY_PATH,
+    LLM_USAGE_PATH,
     META_THEMES_PATH,
     OPEN_CODES_MARKDOWN_PATH,
     RESEARCH_REPORT_PATH,
@@ -20,9 +21,13 @@ from agents.core.paths import (
     ensure_output_dirs,
 )
 from agents.core.report import generate_research_report
-from agents.core.utils import extract_codes, log_step
+from agents.core.utils import extract_codes, log_step, summarize_llm_usage
 import pandas as pd
 from agents.core.app import app
+
+
+def _emit_llm_usage_summary() -> None:
+    log_step("LLM_USAGE_SUMMARY", summarize_llm_usage(LLM_USAGE_PATH))
 
 
 def _base_state(research_question: str) -> dict:
@@ -110,6 +115,7 @@ def main() -> None:
         raise SystemExit(2)
 
     ensure_output_dirs()
+    open(LLM_USAGE_PATH, "w", encoding="utf-8").close()
     rq = args.research_question
     log_step("RESEARCH_QUESTION", rq)
 
@@ -122,6 +128,7 @@ def main() -> None:
         final_hl = app.invoke(state, config={"recursion_limit": 25})
         codebook = final_hl.get("codebook") or {}
         log_step("CODEBOOK_COMPLETE", f"Generated {len(codebook)} high-level labels. See {display_path(CODEBOOK_PATH)}")
+        _emit_llm_usage_summary()
         raise SystemExit(0)
 
     if args.refine_only:
@@ -139,6 +146,7 @@ def main() -> None:
         final_refine = app.invoke(state, config={"recursion_limit": 25})
         summary = final_refine.get("_cluster_refinement_done", False)
         log_step("REFINE_COMPLETE", "Cluster refinement finished." if summary else "Refine step completed.")
+        _emit_llm_usage_summary()
         raise SystemExit(0)
 
     if args.hierarchy_only:
@@ -149,6 +157,7 @@ def main() -> None:
         state["axial_mapping"] = "hierarchy"
         final_hier = app.invoke(state, config={"recursion_limit": 25})
         log_step("HIERARCHY_COMPLETE", final_hier.get("hierarchy", ""))
+        _emit_llm_usage_summary()
         raise SystemExit(0)
 
     if args.meta_themes_only:
@@ -159,6 +168,7 @@ def main() -> None:
         state["axial_mapping"] = "meta_themes"
         final_mt = app.invoke(state, config={"recursion_limit": 25})
         log_step("META_THEMES_COMPLETE", final_mt.get("meta_themes", ""))
+        _emit_llm_usage_summary()
         raise SystemExit(0)
 
     if args.tree_only or args.global_graph_only:
@@ -172,6 +182,7 @@ def main() -> None:
         state["axial_mapping"] = "tree"
         final_tree = app.invoke(state, config={"recursion_limit": 25})
         log_step("TREE_COMPLETE", final_tree.get("global_graph", ""))
+        _emit_llm_usage_summary()
         raise SystemExit(0)
 
     if args.report_only:
@@ -187,6 +198,7 @@ def main() -> None:
             model=args.report_model,
         )
         log_step("RESEARCH_REPORT_COMPLETE", f"Wrote {display_path(RESEARCH_REPORT_PATH)}")
+        _emit_llm_usage_summary()
         raise SystemExit(0)
 
     if args.cooccurrence_only:
@@ -214,6 +226,7 @@ def main() -> None:
             "COOCCURRENCE_COMPLETE",
             f"Wrote {display_path(COOCCURRENCE_PATH)} (skipped unmapped codes in reviews: {sk})",
         )
+        _emit_llm_usage_summary()
         raise SystemExit(0)
 
     if args.axial_only:
@@ -224,6 +237,7 @@ def main() -> None:
         final_axial = app.invoke(state, config={"recursion_limit": 25})
         axial_mapping = final_axial.get("axial_mapping", "")
         log_step("AXIAL_COMPLETE", axial_mapping[:500] + "..." if len(axial_mapping) > 500 else axial_mapping)
+        _emit_llm_usage_summary()
         raise SystemExit(0)
 
     text_df = pd.read_csv(args.data)
@@ -258,6 +272,7 @@ def main() -> None:
 
     if args.open_coding_only:
         log_step("OPEN_CODING_ONLY", "Exiting so SGLang can be killed before axial.")
+        _emit_llm_usage_summary()
         raise SystemExit(0)
 
     state = _base_state(rq)
@@ -271,6 +286,7 @@ def main() -> None:
     final_refine = app.invoke(state, config={"recursion_limit": 25})
     codebook = final_refine.get("codebook") or {}
     log_step("CODEBOOK_REFINE_COMPLETE", f"High-level and refinement done. {len(codebook)} clusters. See {display_path(CODEBOOK_PATH)}")
+    _emit_llm_usage_summary()
 
 
 if __name__ == "__main__":
