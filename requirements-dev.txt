@@ -1,0 +1,5 @@
+# Local CI / dev: core tests import pipeline_helpers (numpy, sklearn, sentence-transformers).
+pytest
+numpy
+scikit-learn
+sentence-transformers

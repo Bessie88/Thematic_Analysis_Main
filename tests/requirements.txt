@@ -1,0 +1,4 @@
+# Minimal deps to run this repo's tests locally (e.g. Compute Canada login nodes
+# where pip cannot resolve numpy from PyPI / custom wheelhouses).
+# Root requirements-dev.txt is still used by GitHub Actions and full dev setups.
+pytest>=8
