@@ -34,5 +34,3 @@ agents/report_server.log
 
 agents/docs/
 notebooks/
-
-agents/scripts/check_tree_fanout.py
