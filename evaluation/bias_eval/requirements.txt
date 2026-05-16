@@ -1,0 +1,13 @@
+numpy
+scikit-learn
+sentence-transformers
+langchain-openai
+langchain-core
+matplotlib
+seaborn
+rouge-score
+bert-score
+plotly
+umap-learn
+openai
+pandas
