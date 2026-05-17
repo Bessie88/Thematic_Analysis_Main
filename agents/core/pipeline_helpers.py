@@ -5,15 +5,13 @@ from __future__ import annotations
 import json
 import os
 from collections import defaultdict
-from typing import Any, Dict, List, Set
-
-import numpy as np
-from sentence_transformers import SentenceTransformer
-from sklearn.cluster import KMeans, MiniBatchKMeans
-from sklearn.metrics import silhouette_score
+from typing import TYPE_CHECKING, Dict, List, Set
 
 from .paths import DATA_DIR, HIERARCHY_PATH, WEIGHTS_DIR, ensure_output_dirs
 from .utils import log_step
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 REFINE_TOP_K_OTHER_CLUSTERS = 5
 
@@ -72,6 +70,8 @@ def drain_ungrouped_to_subthemes(
     embed_model: SentenceTransformer,
 ) -> List[str]:
     """Assign each ungrouped code to the nearest sub-theme by embedding cosine similarity."""
+    import numpy as np
+
     if not validated_sub_themes or not validated_ungrouped:
         return validated_ungrouped
     labels = [st["name"] for st in validated_sub_themes]
@@ -145,6 +145,9 @@ def normalize_meta_theme_count(meta_themes: List[Dict[str, Any]], n_cids: int) -
 
 def deduplicate_codes(all_codes: List[str], model_name: str, near_dup_threshold: float = 0.95) -> tuple:
     """Exact dedup then embedding-based near-dup merge; returns (deduped list, original→canonical map)."""
+    import numpy as np
+    from sentence_transformers import SentenceTransformer
+
     norm_to_canonical: Dict[str, str] = {}
     for code in all_codes:
         normed = code.strip().lower()
@@ -199,6 +202,11 @@ def deduplicate_codes(all_codes: List[str], model_name: str, near_dup_threshold:
 
 def axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str = str(DATA_DIR)) -> str:
     """Embed codes, pick K via silhouette, cluster with K-means/MiniBatch; write gt_clustered_codes.json."""
+    import numpy as np
+    from sentence_transformers import SentenceTransformer
+    from sklearn.cluster import KMeans, MiniBatchKMeans
+    from sklearn.metrics import silhouette_score
+
     MINIBATCH_SIZE = 1000
     K_MIN, K_MAX_DIVISOR = 5, 3
 

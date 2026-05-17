@@ -24,7 +24,11 @@ ensure_pipeline_python_deps
 
 # Override examples:
 #   export GT_DATA_CSV="$REPO_ROOT/data/reddit_comment_text_1000.csv"
-GT_DATA_CSV="${GT_DATA_CSV:-$REPO_ROOT/data/school_burnout_text_review.csv}"
+# GT_DATA_CSV="${GT_DATA_CSV:-$REPO_ROOT/data/school_burnout_text_review.csv}"
+# GT_DATA_CSV="$REPO_ROOT/data/gameplayreview_text_english_3k.csv"
+GT_DATA_CSV="$REPO_ROOT/data/train.csv"
+# GT_DATA_CSV="$REPO_ROOT/data/school_burnout_text_review.csv"
+
 
 MODEL_PATH="$AGENTS_ROOT/weights/Qwen3-30B-A3B-Instruct-2507-AWQ-4bit"
 SERVER_LOG="$AGENTS_ROOT/server.log"
@@ -32,6 +36,8 @@ PORT=8000
 # Research question — keep it broad so open coding stays inductive (avoid naming expected themes).
 # Override: RESEARCH_QUESTION="..." sbatch run.sh
 RESEARCH_QUESTION="What thematic patterns emerge across these reviews?"
+# RESEARCH_QUESTION="What do players dislike about games and software in these reviews?"
+
 export RESEARCH_QUESTION
 
 # Stop SGLang reliably so GPU VRAM is freed before axial (embedding) and other steps.

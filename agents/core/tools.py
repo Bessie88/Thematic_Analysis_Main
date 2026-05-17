@@ -140,7 +140,9 @@ def high_level_code_generation(cluster_file: str = str(CLUSTERED_CODES_PATH), re
             bulleted += f"\n- ... and {len(codes_list) - 30} more"
         prompt = high_level_code_generation_prompt(bulleted, research_question)
         try:
-            raw = llm_invoke_with_skill(llm, "high_level_code_generation", prompt)
+            raw = llm_invoke_with_skill(
+                    llm, "high_level_code_generation", prompt, cluster_id=cid
+                )
             parsed = clean_and_parse_json(remove_think_tags(raw))
             label = (parsed.get("label") or "").strip().strip('"\'')
             if not label or len(label) > 80:
@@ -265,7 +267,13 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
 
             try:
                 raw = remove_think_tags(
-                    llm_invoke_with_skill(llm, "refine_cluster_assignments", prompt)
+                    llm_invoke_with_skill(
+                        llm,
+                        "refine_cluster_assignments",
+                        prompt,
+                        cluster_id=cid,
+                        chunk_index=chunk_idx,
+                    )
                 )
             except Exception as e:
                 log_step("REFINE_LLM_ERROR", f"Cluster {cid} chunk {chunk_idx}: {e}")
@@ -399,7 +407,7 @@ def meta_theme_grouping(research_question: str = "") -> str:
     n_cids = len(all_cids)
     lo, hi = meta_theme_bounds(n_cids)
 
-    def _call_meta_llm(extra: str = "") -> List[Dict[str, Any]]:
+    def _call_meta_llm(extra: str = "", phase: str = "initial") -> List[Dict[str, Any]]:
         base = meta_theme_grouping_prompt(labels_json, research_question)
         prompt = base + (extra or "")
         raw = llm_invoke_with_skill(llm, "meta_theme_grouping", prompt)
@@ -439,7 +447,7 @@ def meta_theme_grouping(research_question: str = "") -> str:
             f"each with a distinct name. Every cluster ID must appear exactly once."
         )
         try:
-            meta_themes_retry = _call_meta_llm(reminder)
+            meta_themes_retry = _call_meta_llm(reminder, phase="retry")
             if meta_themes_retry:
                 meta_themes = meta_themes_retry
                 assigned_cids = set()
@@ -522,7 +530,9 @@ def hierarchy_construction(research_question: str = "") -> str:
                                                "\n".join(f"- {c}" for c in codes_for_prompt),
                                                research_question)
         try:
-            raw = llm_invoke_with_skill(llm, "hierarchy_construction", prompt)
+            raw = llm_invoke_with_skill(
+                llm, "hierarchy_construction", prompt, cluster_id=cid, phase="subtheme"
+            )
             parsed = clean_and_parse_json(raw)
         except Exception as e:
             log_step("HIERARCHY_LLM_ERROR", f"Cluster {cid}: {e}")
@@ -633,8 +643,8 @@ def tree_assembly(research_question: str = "") -> str:
     with open(HIERARCHY_PATH, encoding="utf-8") as f:
         hierarchy = json.load(f)
 
-    def _invoke_skill(skill_key: str, human_prompt: str) -> str:
-        return llm_invoke_with_skill(llm, skill_key, human_prompt)
+    def _invoke_skill(skill_key: str, human_prompt: str, **labels: Any) -> str:
+        return llm_invoke_with_skill(llm, skill_key, human_prompt, **labels)
 
     hierarchy = maybe_refine_hierarchy(hierarchy, research_question or "", _invoke_skill)
     ensure_output_dirs()
