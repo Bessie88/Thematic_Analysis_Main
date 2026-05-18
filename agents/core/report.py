@@ -1,4 +1,5 @@
 """Research report generation from the global graph via a dedicated OpenAI-compatible LLM (e.g. Mistral on SGLang)."""
+
 from __future__ import annotations
 
 import json
