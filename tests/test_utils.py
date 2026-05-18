@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from agents.core import utils
 
 
@@ -30,6 +29,11 @@ def test_clean_and_parse_json_raises_without_braces():
         utils.clean_and_parse_json("no json here")
 
 
+def test_clean_and_parse_json_nested_and_false():
+    text = 'prefix {"items": [1, 2], "ok": false} suffix'
+    assert utils.clean_and_parse_json(text) == {"items": [1, 2], "ok": False}
+
+
 def test_extract_codes_empty():
     assert utils.extract_codes("") == []
     assert utils.extract_codes("   ") == []
@@ -43,6 +47,15 @@ Some preamble
 - code: lowercase ok
 """
     assert utils.extract_codes(blob) == ["Alpha theme", "Beta angle", "lowercase ok"]
+
+
+def test_extract_codes_applicability_none_only():
+    blob = """
+- Applicability: NONE
+  Reason: Off-topic review.
+  Evidence: "generic praise only"
+"""
+    assert utils.extract_codes(blob) == []
 
 
 def test_summarize_llm_usage_missing_file(tmp_path: Path):

@@ -1,9 +1,11 @@
 """State, routing, and tool dispatch for the GT pipeline."""
+
 import json
 from typing import Any, Dict, List, Optional, TypedDict
 
 from langgraph.graph import END
 
+from . import utils as _utils
 from .paths import CLUSTERED_CODES_PATH, CODEBOOK_PATH
 from .tools import (
     axial_coding,
@@ -15,7 +17,6 @@ from .tools import (
     tree_assembly,
     validate_open_codes,
 )
-from . import utils as _utils
 from .utils import log_step, remove_think_tags
 
 # Max retries when validator returns FAIL (open coding)
@@ -36,6 +37,7 @@ TOOLS = {
 
 class GTState(TypedDict, total=False):
     """Schema for graph state; all keys optional (total=False). LangGraph merges node outputs into this."""
+
     # Inputs
     research_question: str
     raw_text: str
@@ -46,7 +48,9 @@ class GTState(TypedDict, total=False):
     _open_coding_retries: int
     # Axial phase: codes -> clusters
     all_codes_for_axial: Optional[List[str]]
-    axial_mapping: Optional[str]  # cluster summary text, or "done"|"refine"|"hierarchy"|"meta_themes"|"tree"
+    axial_mapping: Optional[
+        str
+    ]  # cluster summary text, or "done"|"refine"|"hierarchy"|"meta_themes"|"tree"
     _cluster_refinement_done: Optional[bool]
     # Downstream outputs
     codebook: Optional[Dict[str, str]]
@@ -54,7 +58,9 @@ class GTState(TypedDict, total=False):
     meta_themes: Optional[str]
     global_graph: Optional[str]
     # Control
-    tool_call: Optional[Dict[str, Any]]  # {"tool": name, "args": {...}}; agent sets, tool_node clears
+    tool_call: Optional[
+        Dict[str, Any]
+    ]  # {"tool": name, "args": {...}}; agent sets, tool_node clears
     step: int
     _sim_threshold: float
     _skip_cross_cluster: bool
@@ -88,7 +94,11 @@ def agent_node(state: GTState):
             "_open_coding_retries": retries + 1,
         }
     # --- Open coding: after codes exist, run validator (if not yet run) ---
-    if state.get("open_codes") and state.get("open_codes_validation") is None and not state.get("all_codes_for_axial"):
+    if (
+        state.get("open_codes")
+        and state.get("open_codes_validation") is None
+        and not state.get("all_codes_for_axial")
+    ):
         return {
             "tool_call": {
                 "tool": "validate_open_codes",
@@ -102,32 +112,54 @@ def agent_node(state: GTState):
         }
     # --- Open coding: first call for this review (no feedback) ---
     if not state.get("open_codes") and state.get("raw_text"):
-        return {"tool_call": {"tool": "open_coding", "args": {"text": state["raw_text"], "research_question": rq}}, "step": step}
+        return {
+            "tool_call": {
+                "tool": "open_coding",
+                "args": {"text": state["raw_text"], "research_question": rq},
+            },
+            "step": step,
+        }
 
     # --- Axial phase: first axial step (embed + cluster) ---
     if state.get("all_codes_for_axial") and not state.get("axial_mapping"):
         return {
-            "tool_call": {"tool": "axial_coding", "args": {"open_codes": json.dumps(state["all_codes_for_axial"])}},
+            "tool_call": {
+                "tool": "axial_coding",
+                "args": {"open_codes": json.dumps(state["all_codes_for_axial"])},
+            },
             "step": step,
         }
     # --- Refine phase: high-level then refine_cluster_assignments ---
     if state.get("axial_mapping") == "refine" and not state.get("codebook"):
         return {
-            "tool_call": {"tool": "high_level_code_generation", "args": {"cluster_file": str(CLUSTERED_CODES_PATH), "research_question": rq}},
+            "tool_call": {
+                "tool": "high_level_code_generation",
+                "args": {"cluster_file": str(CLUSTERED_CODES_PATH), "research_question": rq},
+            },
             "step": step,
         }
-    if state.get("axial_mapping") == "refine" and state.get("codebook") and not state.get("_cluster_refinement_done"):
+    if (
+        state.get("axial_mapping") == "refine"
+        and state.get("codebook")
+        and not state.get("_cluster_refinement_done")
+    ):
         return {
             "tool_call": {
                 "tool": "refine_cluster_assignments",
-                "args": {"codebook_path": str(CODEBOOK_PATH), "cluster_file": str(CLUSTERED_CODES_PATH)},
+                "args": {
+                    "codebook_path": str(CODEBOOK_PATH),
+                    "cluster_file": str(CLUSTERED_CODES_PATH),
+                },
             },
             "step": step,
         }
     # --- After axial: high-level labels (sentinel "done"), then hierarchy, meta_themes, tree ---
     if state.get("axial_mapping") == "done" and not state.get("codebook"):
         return {
-            "tool_call": {"tool": "high_level_code_generation", "args": {"cluster_file": str(CLUSTERED_CODES_PATH), "research_question": rq}},
+            "tool_call": {
+                "tool": "high_level_code_generation",
+                "args": {"cluster_file": str(CLUSTERED_CODES_PATH), "research_question": rq},
+            },
             "step": step,
         }
     if state.get("axial_mapping") == "hierarchy" and not state.get("hierarchy"):
@@ -177,7 +209,13 @@ def router(state: GTState):
             return "agent"  # agent will schedule open_coding retry
         return END
     # Axial phase (long text): axial done, no validation step
-    if state.get("axial_mapping") and state.get("axial_mapping") not in ("done", "refine", "hierarchy", "meta_themes", "tree"):
+    if state.get("axial_mapping") and state.get("axial_mapping") not in (
+        "done",
+        "refine",
+        "hierarchy",
+        "meta_themes",
+        "tree",
+    ):
         return END
     # Refine phase: run high_level then refine_cluster_assignments, then END
     if state.get("axial_mapping") == "refine":
@@ -229,7 +267,7 @@ def tool_node(state: GTState):
             clean_output = (
                 "- Applicability: NONE\n"
                 "  Reason: Coder returned no text; cannot validate substantive codes.\n"
-                "  Evidence: \"(empty output)\"\n"
+                '  Evidence: "(empty output)"\n'
             )
         updates["open_codes"] = clean_output
     elif tool_name == "validate_open_codes":

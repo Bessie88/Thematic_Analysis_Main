@@ -1,4 +1,5 @@
 """Helpers for the GT pipeline: logging, text parsing, code extraction, LLM token usage."""
+
 import datetime
 import json
 import re
@@ -78,8 +79,14 @@ def _extract_usage(ai_message: Any) -> Dict[str, Any]:
         if prompt_tokens is None or completion_tokens is None:
             tu = rm.get("token_usage")
             if isinstance(tu, dict):
-                prompt_tokens = prompt_tokens if prompt_tokens is not None else tu.get("prompt_tokens")
-                completion_tokens = completion_tokens if completion_tokens is not None else tu.get("completion_tokens")
+                prompt_tokens = (
+                    prompt_tokens if prompt_tokens is not None else tu.get("prompt_tokens")
+                )
+                completion_tokens = (
+                    completion_tokens
+                    if completion_tokens is not None
+                    else tu.get("completion_tokens")
+                )
                 total_tokens = total_tokens if total_tokens is not None else tu.get("total_tokens")
 
     usage_missing = prompt_tokens is None and completion_tokens is None
@@ -194,7 +201,9 @@ def summarize_llm_usage(jsonl_path: Path = LLM_USAGE_PATH) -> str:
     ]
     for k in sorted(by_tool.keys()):
         v = by_tool[k]
-        lines.append(f"  {k}: calls={v['calls']} in={v['prompt_tokens']} out={v['completion_tokens']} total={v['total_tokens']}")
+        lines.append(
+            f"  {k}: calls={v['calls']} in={v['prompt_tokens']} out={v['completion_tokens']} total={v['total_tokens']}"
+        )
     lines.append("")
     lines.append("By step:")
 
@@ -206,10 +215,14 @@ def summarize_llm_usage(jsonl_path: Path = LLM_USAGE_PATH) -> str:
 
     for k in sorted(by_step.keys(), key=_step_sort_key):
         v = by_step[k]
-        lines.append(f"  step={k}: calls={v['calls']} in={v['prompt_tokens']} out={v['completion_tokens']} total={v['total_tokens']}")
+        lines.append(
+            f"  step={k}: calls={v['calls']} in={v['prompt_tokens']} out={v['completion_tokens']} total={v['total_tokens']}"
+        )
     lines.append("")
     lines.append("By skill:")
     for k in sorted(by_skill.keys()):
         v = by_skill[k]
-        lines.append(f"  {k}: calls={v['calls']} in={v['prompt_tokens']} out={v['completion_tokens']} total={v['total_tokens']}")
+        lines.append(
+            f"  {k}: calls={v['calls']} in={v['prompt_tokens']} out={v['completion_tokens']} total={v['total_tokens']}"
+        )
     return "\n".join(lines)

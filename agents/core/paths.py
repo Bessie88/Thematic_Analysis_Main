@@ -1,4 +1,5 @@
 """Centralized filesystem paths for the GT pipeline."""
+
 from pathlib import Path
 
 AGENTS_DIR = Path(__file__).resolve().parent.parent

@@ -4,6 +4,7 @@ Post-pipeline co-occurrence: theme / meta-theme pairs within the same review.
 Reads gt_clustered_codes.json (codes_per_review) and gt_global_graph.json (tree).
 No LLM. See docs/FEATURES_PLAN.md Feature 2.
 """
+
 from __future__ import annotations
 
 import json
@@ -62,7 +63,9 @@ def build_code_maps_from_graph(graph: Mapping[str, Any]) -> Tuple[Dict[str, str]
     return code_to_theme, code_to_meta
 
 
-def _symmetric_matrix_from_pair_counts(pair_counts: Mapping[Tuple[str, str], int]) -> Dict[str, Dict[str, int]]:
+def _symmetric_matrix_from_pair_counts(
+    pair_counts: Mapping[Tuple[str, str], int],
+) -> Dict[str, Dict[str, int]]:
     """pair_counts keys are (min(a,b), max(a,b)) with a != b."""
     outer: Dict[str, MutableMapping[str, int]] = defaultdict(lambda: defaultdict(int))
     for (a, b), cnt in pair_counts.items():

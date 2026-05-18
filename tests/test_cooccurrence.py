@@ -4,52 +4,15 @@ import json
 from pathlib import Path
 
 import pytest
-
-from agents.core.cooccurrence import build_cooccurrence, build_code_maps_from_graph
-
-
-def _two_theme_graph() -> dict:
-    """One meta-theme, two themes, two codes (for cross-theme pairs within a review)."""
-    return {
-        "tree": {
-            "type": "root",
-            "name": "Root",
-            "children": [
-                {
-                    "type": "meta_theme",
-                    "name": "MetaOne",
-                    "children": [
-                        {
-                            "type": "theme",
-                            "name": "ThemeA",
-                            "children": [
-                                {
-                                    "type": "sub_theme",
-                                    "name": "SA",
-                                    "children": [{"type": "code", "name": "code_a"}],
-                                }
-                            ],
-                        },
-                        {
-                            "type": "theme",
-                            "name": "ThemeB",
-                            "children": [
-                                {
-                                    "type": "sub_theme",
-                                    "name": "SB",
-                                    "children": [{"type": "code", "name": "code_b"}],
-                                }
-                            ],
-                        },
-                    ],
-                }
-            ],
-        }
-    }
+from agents.core.cooccurrence import (
+    build_code_maps_from_graph,
+    build_cooccurrence,
+    write_cooccurrence,
+)
 
 
-def test_build_code_maps_from_graph_maps_codes():
-    graph = _two_theme_graph()
+def test_build_code_maps_from_graph_maps_codes(load_fixture):
+    graph = load_fixture("minimal_global_graph.json")
     code_to_theme, code_to_meta = build_code_maps_from_graph(graph)
     assert code_to_theme["code_a"] == "ThemeA"
     assert code_to_theme["code_b"] == "ThemeB"
@@ -62,14 +25,11 @@ def test_build_code_maps_from_graph_requires_tree():
         build_code_maps_from_graph({})
 
 
-def test_build_cooccurrence_theme_pairs(tmp_path: Path):
+def test_build_cooccurrence_theme_pairs(tmp_path: Path, load_fixture):
     gpath = tmp_path / "gt_global_graph.json"
     cpath = tmp_path / "gt_clustered_codes.json"
-    gpath.write_text(json.dumps(_two_theme_graph()), encoding="utf-8")
-    cpath.write_text(
-        json.dumps({"codes_per_review": [["review-1", ["code_a", "code_b"]]]}),
-        encoding="utf-8",
-    )
+    gpath.write_text(json.dumps(load_fixture("minimal_global_graph.json")), encoding="utf-8")
+    cpath.write_text(json.dumps(load_fixture("minimal_clustered_codes.json")), encoding="utf-8")
 
     payload = build_cooccurrence(cpath, gpath)
     tm = payload["theme_matrix"]
@@ -81,13 +41,27 @@ def test_build_cooccurrence_theme_pairs(tmp_path: Path):
     assert pairs[0]["count"] == 1
 
 
-def test_build_cooccurrence_skips_unmapped_codes(tmp_path: Path):
+def test_build_cooccurrence_skips_unmapped_codes(tmp_path: Path, load_fixture):
     gpath = tmp_path / "gt_global_graph.json"
     cpath = tmp_path / "gt_clustered_codes.json"
-    gpath.write_text(json.dumps(_two_theme_graph()), encoding="utf-8")
+    gpath.write_text(json.dumps(load_fixture("minimal_global_graph.json")), encoding="utf-8")
     cpath.write_text(
         json.dumps({"codes_per_review": [["review-1", ["code_a", "unknown"]]]}),
         encoding="utf-8",
     )
     payload = build_cooccurrence(cpath, gpath)
     assert payload["theme_matrix"] == {}
+
+
+def test_write_cooccurrence_writes_file(tmp_path: Path, load_fixture):
+    gpath = tmp_path / "gt_global_graph.json"
+    cpath = tmp_path / "gt_clustered_codes.json"
+    out_path = tmp_path / "gt_cooccurrence.json"
+    gpath.write_text(json.dumps(load_fixture("minimal_global_graph.json")), encoding="utf-8")
+    cpath.write_text(json.dumps(load_fixture("minimal_clustered_codes.json")), encoding="utf-8")
+
+    meta = write_cooccurrence(cpath, gpath, out_path)
+    assert out_path.is_file()
+    assert meta["written"] == str(out_path)
+    data = json.loads(out_path.read_text(encoding="utf-8"))
+    assert data["total_reviews"] == 1

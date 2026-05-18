@@ -1,4 +1,5 @@
 """LLM prompt strings for the GT pipeline. Tools import these to keep prompt iteration separate from logic."""
+
 from typing import Optional
 
 
@@ -137,6 +138,7 @@ If no codes meet all three criteria, output: NONE
 
 Do not move codes that are borderline, tangentially related, or where you are choosing the "least bad" option from the list. When in doubt: NONE."""
 
+
 def relationship_classification_prompt(
     node_a: str,
     node_b: str,
@@ -164,7 +166,9 @@ def meta_theme_grouping_prompt(labels_json: str, research_question: str) -> str:
     """Prompt to group cluster labels into a small handful of broad meta-themes (about 3–7 when there are many clusters)."""
     rq_line = ""
     if research_question:
-        rq_line = f"\nResearch Question: {research_question}\nGroup with the research question in mind.\n"
+        rq_line = (
+            f"\nResearch Question: {research_question}\nGroup with the research question in mind.\n"
+        )
     return f"""You are organising the results of a thematic analysis into a high-level hierarchy.
 
 Below is a JSON object mapping cluster IDs to their labels:

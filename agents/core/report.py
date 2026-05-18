@@ -96,9 +96,7 @@ def build_graph_text_for_llm(graph_path: Path, max_chars: int) -> str:
 
     def pack(nn: List[str], ee: List[Dict[str, Any]]) -> str:
         node_lines = "\n".join(f"- {x}" for x in nn) if nn else "(none)"
-        edge_lines = "\n".join(
-            f"  {e.get('parent')} -> {e.get('child')}" for e in ee
-        )
+        edge_lines = "\n".join(f"  {e.get('parent')} -> {e.get('child')}" for e in ee)
         return "\n".join(
             [
                 f"graph_file_nodes: {len(nodes)}",

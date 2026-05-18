@@ -1,5 +1,10 @@
-# Local CI / dev: core tests import pipeline_helpers (numpy, sklearn, sentence-transformers).
-pytest
+# Local CI / dev: tests import pipeline_helpers (numpy, sklearn) and state/tools (langchain).
+pytest>=8
+pytest-cov>=5
+ruff>=0.8
 numpy
 scikit-learn
 sentence-transformers
+langchain-core>=0.3
+langchain-openai>=0.3
+langgraph>=0.3

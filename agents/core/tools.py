@@ -8,11 +8,10 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from sentence_transformers import SentenceTransformer
-
-import numpy as np
 
 from .hierarchy_refine import maybe_refine_hierarchy
 from .paths import (
@@ -91,7 +90,9 @@ def axial_coding(open_codes: str) -> str:
     if not isinstance(all_codes, list) or not all(isinstance(x, str) for x in all_codes):
         return "axial_coding expects a JSON array of code strings."
     model_name = os.environ.get("GT_EMBED_MODEL") or (
-        str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B") if os.path.isdir(str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B")) else "Qwen/Qwen3-Embedding-0.6B"
+        str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B")
+        if os.path.isdir(str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B"))
+        else "Qwen/Qwen3-Embedding-0.6B"
     )
     if os.path.isdir(model_name):
         model_name = os.path.abspath(model_name)
@@ -100,7 +101,9 @@ def axial_coding(open_codes: str) -> str:
 
 
 @tool
-def high_level_code_generation(cluster_file: str = str(CLUSTERED_CODES_PATH), research_question: str = "") -> str:
+def high_level_code_generation(
+    cluster_file: str = str(CLUSTERED_CODES_PATH), research_question: str = ""
+) -> str:
     """
     One LLM call per cluster: label, confidence (1–5), rationale.
     Writes codebook.json and codebook_confidence.json; returns codebook JSON.
@@ -140,11 +143,9 @@ def high_level_code_generation(cluster_file: str = str(CLUSTERED_CODES_PATH), re
             bulleted += f"\n- ... and {len(codes_list) - 30} more"
         prompt = high_level_code_generation_prompt(bulleted, research_question)
         try:
-            raw = llm_invoke_with_skill(
-                    llm, "high_level_code_generation", prompt, cluster_id=cid
-                )
+            raw = llm_invoke_with_skill(llm, "high_level_code_generation", prompt, cluster_id=cid)
             parsed = clean_and_parse_json(remove_think_tags(raw))
-            label = (parsed.get("label") or "").strip().strip('"\'')
+            label = (parsed.get("label") or "").strip().strip("\"'")
             if not label or len(label) > 80:
                 label = f"Cluster {cid}"
             confidence = parsed.get("confidence", 1)
@@ -165,9 +166,11 @@ def high_level_code_generation(cluster_file: str = str(CLUSTERED_CODES_PATH), re
         if cid not in codebook_confidence:
             codebook_confidence[cid] = {"label": codebook[cid], "confidence": 1, "rationale": ""}
 
-    pending = {cid: (codes if isinstance(codes, list) else [])
-               for cid, codes in sorted(cluster_to_codes.items(), key=lambda x: int(x[0]))
-               if cid not in codebook}
+    pending = {
+        cid: (codes if isinstance(codes, list) else [])
+        for cid, codes in sorted(cluster_to_codes.items(), key=lambda x: int(x[0]))
+        if cid not in codebook
+    }
 
     _hl_lock = threading.Lock()
     workers = int(os.environ.get("GT_HIGH_LEVEL_WORKERS", "8"))
@@ -179,11 +182,20 @@ def high_level_code_generation(cluster_file: str = str(CLUSTERED_CODES_PATH), re
             label, confidence, rationale = fut.result()
             with _hl_lock:
                 codebook[cid] = label
-                codebook_confidence[cid] = {"label": label, "confidence": confidence, "rationale": rationale}
+                codebook_confidence[cid] = {
+                    "label": label,
+                    "confidence": confidence,
+                    "rationale": rationale,
+                }
                 if confidence <= 2:
-                    log_step("LOW_CONFIDENCE_CLUSTER", f"Cluster {cid}: confidence={confidence}, label={label}")
+                    log_step(
+                        "LOW_CONFIDENCE_CLUSTER",
+                        f"Cluster {cid}: confidence={confidence}, label={label}",
+                    )
                 with open(out_path, "w", encoding="utf-8") as f:
-                    json.dump({"codebook": codebook, "cluster_to_codes": cluster_to_codes}, f, indent=2)
+                    json.dump(
+                        {"codebook": codebook, "cluster_to_codes": cluster_to_codes}, f, indent=2
+                    )
                 with open(confidence_path, "w", encoding="utf-8") as f:
                     json.dump(codebook_confidence, f, indent=2)
 
@@ -311,7 +323,10 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
     for move in moves_applied:
         code, from_cid, to_cid = move
         if code in seen_codes:
-            log_step("REFINE_CONFLICTING_MOVE", f"Code '{code}' has multiple move targets; keeping first.")
+            log_step(
+                "REFINE_CONFLICTING_MOVE",
+                f"Code '{code}' has multiple move targets; keeping first.",
+            )
         else:
             seen_codes[code] = move
             deduped_moves.append(move)
@@ -345,10 +360,14 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
     os.makedirs(os.path.dirname(cluster_file) or ".", exist_ok=True)
     with open(cluster_file, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2)
-    new_codebook = {str(i): codebook.get(cid_list[i], f"Cluster {cid_list[i]}") for i in range(len(cid_list))}
+    new_codebook = {
+        str(i): codebook.get(cid_list[i], f"Cluster {cid_list[i]}") for i in range(len(cid_list))
+    }
     with open(codebook_path, "w", encoding="utf-8") as f:
         json.dump({"codebook": new_codebook, "cluster_to_codes": new_cluster_to_codes}, f, indent=2)
-    confidence_path = os.path.join(os.path.dirname(codebook_path) or ".", "codebook_confidence.json")
+    confidence_path = os.path.join(
+        os.path.dirname(codebook_path) or ".", "codebook_confidence.json"
+    )
     codebook_confidence_rekeyed: Dict[str, Dict[str, Any]] = {}
     if os.path.isfile(confidence_path):
         try:
@@ -360,11 +379,21 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
                 if isinstance(entry, dict):
                     codebook_confidence_rekeyed[str(i)] = {**entry, "label": new_codebook[str(i)]}
                 else:
-                    codebook_confidence_rekeyed[str(i)] = {"label": new_codebook[str(i)], "confidence": 1, "rationale": ""}
+                    codebook_confidence_rekeyed[str(i)] = {
+                        "label": new_codebook[str(i)],
+                        "confidence": 1,
+                        "rationale": "",
+                    }
         except (json.JSONDecodeError, TypeError):
-            codebook_confidence_rekeyed = {str(i): {"label": new_codebook[str(i)], "confidence": 1, "rationale": ""} for i in range(len(cid_list))}
+            codebook_confidence_rekeyed = {
+                str(i): {"label": new_codebook[str(i)], "confidence": 1, "rationale": ""}
+                for i in range(len(cid_list))
+            }
     else:
-        codebook_confidence_rekeyed = {str(i): {"label": new_codebook[str(i)], "confidence": 1, "rationale": ""} for i in range(len(cid_list))}
+        codebook_confidence_rekeyed = {
+            str(i): {"label": new_codebook[str(i)], "confidence": 1, "rationale": ""}
+            for i in range(len(cid_list))
+        }
     with open(confidence_path, "w", encoding="utf-8") as f:
         json.dump(codebook_confidence_rekeyed, f, indent=2)
 
@@ -526,9 +555,9 @@ def hierarchy_construction(research_question: str = "") -> str:
 
         BATCH_SIZE = 60
         codes_for_prompt = unique_codes[:BATCH_SIZE]
-        prompt = intra_cluster_subtheme_prompt(label,
-                                               "\n".join(f"- {c}" for c in codes_for_prompt),
-                                               research_question)
+        prompt = intra_cluster_subtheme_prompt(
+            label, "\n".join(f"- {c}" for c in codes_for_prompt), research_question
+        )
         try:
             raw = llm_invoke_with_skill(
                 llm, "hierarchy_construction", prompt, cluster_id=cid, phase="subtheme"
@@ -548,8 +577,11 @@ def hierarchy_construction(research_question: str = "") -> str:
             if st_codes:
                 validated_sub_themes.append({"name": st.get("name", "Unnamed"), "codes": st_codes})
 
-        validated_ungrouped = [c for c in parsed.get("ungrouped_codes", [])
-                               if c in set(codes_for_prompt) and c not in assigned_codes]
+        validated_ungrouped = [
+            c
+            for c in parsed.get("ungrouped_codes", [])
+            if c in set(codes_for_prompt) and c not in assigned_codes
+        ]
         assigned_codes.update(validated_ungrouped)
         validated_ungrouped.extend(c for c in codes_for_prompt if c not in assigned_codes)
 
@@ -559,11 +591,15 @@ def hierarchy_construction(research_question: str = "") -> str:
             assign_batch = hierarchy_assign_batch()
             if st_names:
                 for chunk_idx, chunk_start in enumerate(range(0, len(remaining), assign_batch)):
-                    chunk = remaining[chunk_start: chunk_start + assign_batch]
+                    chunk = remaining[chunk_start : chunk_start + assign_batch]
                     try:
                         raw2 = llm_invoke_with_skill(
-                            llm, "hierarchy_construction",
-                            assign_codes_to_subthemes_prompt(label, st_names, chunk, research_question))
+                            llm,
+                            "hierarchy_construction",
+                            assign_codes_to_subthemes_prompt(
+                                label, st_names, chunk, research_question
+                            ),
+                        )
                         parsed2 = clean_and_parse_json(raw2)
                         assigned_chunk: set = set()
                         for st_name, st_codes in parsed2.get("assignments", {}).items():
@@ -586,38 +622,51 @@ def hierarchy_construction(research_question: str = "") -> str:
             else:
                 validated_ungrouped.extend(remaining)
 
-        if (hierarchy_embed_drain_enabled()
-                and len(validated_ungrouped) > EMBED_DRAIN_THRESHOLD
-                and validated_sub_themes):
+        if (
+            hierarchy_embed_drain_enabled()
+            and len(validated_ungrouped) > EMBED_DRAIN_THRESHOLD
+            and validated_sub_themes
+        ):
             try:
                 drain_model = SentenceTransformer(embed_model_name_for_hierarchy(), device="cpu")
                 validated_ungrouped = drain_ungrouped_to_subthemes(
-                    validated_sub_themes, validated_ungrouped, drain_model)
+                    validated_sub_themes, validated_ungrouped, drain_model
+                )
             except Exception as e:
                 log_step("HIERARCHY_EMBED_DRAIN_ERROR", f"Cluster {cid}: {e}")
 
-        return cid, {"label": label, "sub_themes": validated_sub_themes,
-                     "ungrouped_codes": validated_ungrouped}
+        return cid, {
+            "label": label,
+            "sub_themes": validated_sub_themes,
+            "ungrouped_codes": validated_ungrouped,
+        }
 
-    pending = {cid: (codes, codebook.get(cid, f"Cluster {cid}"))
-               for cid, codes in sorted(cluster_to_codes.items(), key=lambda x: int(x[0]))
-               if cid not in hierarchy}
+    pending = {
+        cid: (codes, codebook.get(cid, f"Cluster {cid}"))
+        for cid, codes in sorted(cluster_to_codes.items(), key=lambda x: int(x[0]))
+        if cid not in hierarchy
+    }
 
     _hier_lock = threading.Lock()
     workers = int(os.environ.get("GT_HIERARCHY_WORKERS", "8"))
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(_process_one, cid, codes, label): cid
-                   for cid, (codes, label) in pending.items()}
+        futures = {
+            ex.submit(_process_one, cid, codes, label): cid
+            for cid, (codes, label) in pending.items()
+        }
         for fut in as_completed(futures):
             cid, result = fut.result()
             with _hier_lock:
                 hierarchy[cid] = result
-                total_codes = (sum(len(st["codes"]) for st in result["sub_themes"])
-                               + len(result["ungrouped_codes"]))
-                log_step("HIERARCHY_CLUSTER_DONE",
-                         f"Cluster {cid} ({result['label']}): "
-                         f"{len(result['sub_themes'])} sub-themes, {total_codes} codes")
+                total_codes = sum(len(st["codes"]) for st in result["sub_themes"]) + len(
+                    result["ungrouped_codes"]
+                )
+                log_step(
+                    "HIERARCHY_CLUSTER_DONE",
+                    f"Cluster {cid} ({result['label']}): "
+                    f"{len(result['sub_themes'])} sub-themes, {total_codes} codes",
+                )
                 save_hierarchy(hierarchy)
 
     summary = f"Hierarchy: {len(hierarchy)} clusters with sub-theme groupings. See {display_path(HIERARCHY_PATH)}"
@@ -631,7 +680,9 @@ def tree_assembly(research_question: str = "") -> str:
     Runs maybe_refine_hierarchy (env GT_HIERARCHY_REFINE) and may rewrite gt_hierarchy.json.
     """
     if not os.path.isfile(str(META_THEMES_PATH)):
-        return json.dumps({"error": "Missing gt_meta_themes.json; run meta_theme_grouping step first."})
+        return json.dumps(
+            {"error": "Missing gt_meta_themes.json; run meta_theme_grouping step first."}
+        )
     if not os.path.isfile(str(HIERARCHY_PATH)):
         return json.dumps({"error": "Missing gt_hierarchy.json; run hierarchy step first."})
     codebook_path = str(CODEBOOK_PATH)

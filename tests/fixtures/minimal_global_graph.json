@@ -1,0 +1,36 @@
+{
+  "tree": {
+    "type": "root",
+    "name": "Root",
+    "children": [
+      {
+        "type": "meta_theme",
+        "name": "MetaOne",
+        "children": [
+          {
+            "type": "theme",
+            "name": "ThemeA",
+            "children": [
+              {
+                "type": "sub_theme",
+                "name": "SA",
+                "children": [{"type": "code", "name": "code_a"}]
+              }
+            ]
+          },
+          {
+            "type": "theme",
+            "name": "ThemeB",
+            "children": [
+              {
+                "type": "sub_theme",
+                "name": "SB",
+                "children": [{"type": "code", "name": "code_b"}]
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

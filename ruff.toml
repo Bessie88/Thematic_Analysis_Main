@@ -1,0 +1,16 @@
+target-version = "py311"
+line-length = 100
+src = ["agents/core", "tests"]
+exclude = [
+    "agents/weights",
+    "agents/outputs",
+    "agents/old_slurm.out",
+    ".pytest_cache",
+]
+
+[lint]
+select = ["E", "F", "I", "W"]
+ignore = ["E501"]
+
+[lint.per-file-ignores]
+"agents/core/tools.py" = ["E402"]

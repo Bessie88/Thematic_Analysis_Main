@@ -17,6 +17,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from .utils import record_llm_usage
 
+
 def _truthy(v: str | None) -> bool:
     if v is None:
         return False
@@ -24,7 +25,9 @@ def _truthy(v: str | None) -> bool:
 
 
 def _skills_dir() -> Path:
-    return Path(os.environ.get("GT_SKILLS_DIR", str(Path(__file__).resolve().parent.parent / "skills"))).resolve()
+    return Path(
+        os.environ.get("GT_SKILLS_DIR", str(Path(__file__).resolve().parent.parent / "skills"))
+    ).resolve()
 
 
 def _strip_yaml_frontmatter(text: str) -> str:
@@ -89,11 +92,14 @@ def llm_invoke_with_skill(llm, skill_key: str, human_prompt: str, **labels: Any)
     """
     sys_text = load_skill_text(skill_key)
     human_prompt = human_prompt if human_prompt is not None else ""
-    arg = human_prompt if not sys_text else [SystemMessage(content=sys_text), HumanMessage(content=human_prompt)]
+    arg = (
+        human_prompt
+        if not sys_text
+        else [SystemMessage(content=sys_text), HumanMessage(content=human_prompt)]
+    )
 
     t0 = time.monotonic()
     ai = llm.invoke(arg)
     latency_ms = (time.monotonic() - t0) * 1000.0
     record_llm_usage(skill_key, ai, latency_ms=latency_ms, labels=labels or None)
     return (ai.content or "").strip()
-

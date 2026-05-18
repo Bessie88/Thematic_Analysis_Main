@@ -5,6 +5,7 @@ Reads/writes the same gt_hierarchy.json schema with optional nested sub_themes:
 - Leaf: {"name": str, "codes": [str, ...]}
 - Internal: {"name": str, "sub_themes": [ ... ]}
 """
+
 from __future__ import annotations
 
 import os
@@ -59,9 +60,7 @@ def _num_groups_for_split(n: int, cap: int) -> int:
     return min(12, max(2, need))
 
 
-def _deterministic_leaves(
-    codes: List[str], cap: int, name_prefix: str
-) -> List[Dict[str, Any]]:
+def _deterministic_leaves(codes: List[str], cap: int, name_prefix: str) -> List[Dict[str, Any]]:
     """Split codes into fixed-size chunks (neutral names)."""
     out: List[Dict[str, Any]] = []
     for i in range(0, len(codes), cap):
@@ -273,9 +272,7 @@ def refine_sub_theme_node(
 
     if isinstance(nested_in, list) and nested_in:
         refined_children = [
-            refine_sub_theme_node(
-                child, cluster_label, research_question, depth + 1, invoke
-            )
+            refine_sub_theme_node(child, cluster_label, research_question, depth + 1, invoke)
             for child in nested_in
             if isinstance(child, dict)
         ]
@@ -292,9 +289,7 @@ def refine_sub_theme_node(
         return {"name": name, "sub_themes": refined_children}
 
     codes = [str(c) for c in codes_in if isinstance(c, str)]
-    return refine_leaf_bucket(
-        cluster_label, name, codes, research_question, depth, invoke
-    )
+    return refine_leaf_bucket(cluster_label, name, codes, research_question, depth, invoke)
 
 
 def refine_cluster_entry(
@@ -315,9 +310,7 @@ def refine_cluster_entry(
     new_subs: List[Dict[str, Any]] = []
     for st in sub_themes_in:
         if isinstance(st, dict):
-            new_subs.append(
-                refine_sub_theme_node(st, label, research_question, 0, invoke)
-            )
+            new_subs.append(refine_sub_theme_node(st, label, research_question, 0, invoke))
 
     cap = _max_bucket()
     overflow_bucket = f"Further themes ({label})"

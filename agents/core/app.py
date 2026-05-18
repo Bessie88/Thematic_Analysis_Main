@@ -1,4 +1,4 @@
-from langgraph.graph import StateGraph, END
+from langgraph.graph import END, StateGraph
 
 from .state import GTState, agent_node, router, tool_node
 
@@ -10,4 +10,4 @@ graph.set_entry_point("agent")
 graph.add_conditional_edges("agent", router, {"tool": "tool", END: END, "agent": "agent"})
 graph.add_edge("tool", "agent")
 
-app = graph.compile() #  gt_agents.py calls this with app.invoke(state, config={...})
+app = graph.compile() #gt_agents.py calls this with app.invoke(state, config={...})

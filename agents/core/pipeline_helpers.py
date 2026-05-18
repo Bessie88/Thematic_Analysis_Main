@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from collections import defaultdict
-from typing import TYPE_CHECKING, Dict, List, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Set
 
 from .paths import DATA_DIR, HIERARCHY_PATH, WEIGHTS_DIR, ensure_output_dirs
 from .utils import log_step
@@ -76,7 +76,9 @@ def drain_ungrouped_to_subthemes(
         return validated_ungrouped
     labels = [st["name"] for st in validated_sub_themes]
     lab_emb = embed_model.encode(labels, normalize_embeddings=True, show_progress_bar=False)
-    code_emb = embed_model.encode(validated_ungrouped, normalize_embeddings=True, show_progress_bar=False)
+    code_emb = embed_model.encode(
+        validated_ungrouped, normalize_embeddings=True, show_progress_bar=False
+    )
     lab_emb = np.asarray(lab_emb, dtype=np.float32)
     code_emb = np.asarray(code_emb, dtype=np.float32)
     sims = code_emb @ lab_emb.T
@@ -123,7 +125,9 @@ def merge_two_smallest_meta(meta_themes: List[Dict[str, Any]]) -> List[Dict[str,
     return new_list
 
 
-def normalize_meta_theme_count(meta_themes: List[Dict[str, Any]], n_cids: int) -> List[Dict[str, Any]]:
+def normalize_meta_theme_count(
+    meta_themes: List[Dict[str, Any]], n_cids: int
+) -> List[Dict[str, Any]]:
     lo, hi = meta_theme_bounds(n_cids)
     mt = list(meta_themes)
     for _ in range(32):
@@ -143,7 +147,9 @@ def normalize_meta_theme_count(meta_themes: List[Dict[str, Any]], n_cids: int) -
     return mt
 
 
-def deduplicate_codes(all_codes: List[str], model_name: str, near_dup_threshold: float = 0.95) -> tuple:
+def deduplicate_codes(
+    all_codes: List[str], model_name: str, near_dup_threshold: float = 0.95
+) -> tuple:
     """Exact dedup then embedding-based near-dup merge; returns (deduped list, original→canonical map)."""
     import numpy as np
     from sentence_transformers import SentenceTransformer
@@ -160,7 +166,9 @@ def deduplicate_codes(all_codes: List[str], model_name: str, near_dup_threshold:
         return unique_codes, orig_map
 
     model = SentenceTransformer(model_name)
-    embeddings = model.encode(unique_codes, batch_size=64, show_progress_bar=False, normalize_embeddings=True)
+    embeddings = model.encode(
+        unique_codes, batch_size=64, show_progress_bar=False, normalize_embeddings=True
+    )
     embeddings = np.asarray(embeddings, dtype=np.float32)
     sim_matrix = embeddings @ embeddings.T
 
@@ -200,7 +208,9 @@ def deduplicate_codes(all_codes: List[str], model_name: str, near_dup_threshold:
     return deduped, orig_map
 
 
-def axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str = str(DATA_DIR)) -> str:
+def axial_embed_and_cluster(
+    all_codes: List[str], model_name: str, out_dir: str = str(DATA_DIR)
+) -> str:
     """Embed codes, pick K via silhouette, cluster with K-means/MiniBatch; write gt_clustered_codes.json."""
     import numpy as np
     from sentence_transformers import SentenceTransformer
@@ -218,13 +228,21 @@ def axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str 
     log_step("DEDUP", f"Reduced {original_count} codes to {len(deduped_codes)} unique codes")
 
     model = SentenceTransformer(model_name)
-    embeddings = model.encode(deduped_codes, batch_size=64, show_progress_bar=True, normalize_embeddings=True)
+    embeddings = model.encode(
+        deduped_codes, batch_size=64, show_progress_bar=True, normalize_embeddings=True
+    )
     embeddings = np.asarray(embeddings, dtype=np.float32)
 
     n = len(embeddings)
     if n < K_MIN:
         cluster_to_codes_out = {"0": deduped_codes}
-        out = {"all_codes": deduped_codes, "labels": [0] * n, "k": 1, "cluster_to_codes": cluster_to_codes_out, "dedup_map": dedup_map}
+        out = {
+            "all_codes": deduped_codes,
+            "labels": [0] * n,
+            "k": 1,
+            "cluster_to_codes": cluster_to_codes_out,
+            "dedup_map": dedup_map,
+        }
         os.makedirs(out_dir, exist_ok=True)
         with open(os.path.join(out_dir, "gt_clustered_codes.json"), "w", encoding="utf-8") as f:
             json.dump(out, f, indent=2)
@@ -244,7 +262,9 @@ def axial_embed_and_cluster(all_codes: List[str], model_name: str, out_dir: str 
             best_sil, best_k = sil, k
 
     if use_minibatch:
-        km = MiniBatchKMeans(n_clusters=best_k, batch_size=MINIBATCH_SIZE, random_state=42, n_init=3)
+        km = MiniBatchKMeans(
+            n_clusters=best_k, batch_size=MINIBATCH_SIZE, random_state=42, n_init=3
+        )
     else:
         km = KMeans(n_clusters=best_k, random_state=42, n_init=10)
     labels = km.fit_predict(embeddings)

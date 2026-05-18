@@ -1,0 +1,12 @@
+{
+  "1": {
+    "label": "Cluster 1",
+    "sub_themes": [
+      {
+        "name": "Main bucket",
+        "codes": ["c1", "c2", "c3"]
+      }
+    ],
+    "ungrouped_codes": []
+  }
+}

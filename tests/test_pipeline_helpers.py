@@ -6,7 +6,6 @@ dev requirements fail on a restricted pip index (e.g. some HPC login nodes).
 """
 
 import pytest
-
 from agents.core.pipeline_helpers import (
     build_sub_theme_node,
     hierarchy_assign_batch,
