@@ -2,6 +2,7 @@
 
 import json
 import os
+import random
 import re
 import threading
 from collections import defaultdict
@@ -42,6 +43,7 @@ from .pipeline_helpers import (
 )
 from .prompts import (
     high_level_code_generation_prompt,
+    high_level_synthesis_prompt,
     intra_cluster_subtheme_prompt,
     meta_theme_grouping_prompt,
     open_coding_prompt,
@@ -161,6 +163,61 @@ def high_level_code_generation(
             log_step("HIGH_LEVEL_LLM_ERROR", f"Cluster {cid}: {e}")
             return f"Cluster {cid}", 1, ""
 
+    # Strategy for high-level code generation:
+    # - default: first 30 codes in the cluster
+    # - nsampling: draw n random samples, get a candidate label per sample, synthesize.
+    strategy = os.environ.get("GT_HIGH_LEVEL_STRATEGY", "nsampling")
+    n_samples = int(os.environ.get("GT_HL_N_SAMPLES", "5"))
+    sample_size = int(os.environ.get("GT_HL_SAMPLE_SIZE", "15"))
+
+    def _label_one_nsampling(cid, codes_list):
+        """N-sampling strategy: draw n random samples, get a candidate label per sample, synthesize.
+
+        Returns a 4-tuple (label, confidence, rationale, candidate_labels) so callers can store
+        the intermediate candidates for post-hoc analysis of inter-sample agreement.
+        """
+        if not codes_list:
+            return f"Cluster {cid}", 1, "", []
+        if len(codes_list) <= sample_size:
+            label, confidence, rationale = _label_one(cid, codes_list)
+            return label, confidence, rationale, []
+        candidate_labels = []
+        for _ in range(n_samples):
+            sample = random.sample(codes_list, min(sample_size, len(codes_list)))
+            bulleted = "\n".join(f"- {c}" for c in sample)
+            prompt = high_level_code_generation_prompt(bulleted, research_question)
+            try:
+                raw = llm_invoke_with_skill(
+                    llm, "high_level_code_generation", prompt, cluster_id=cid
+                )
+                parsed = clean_and_parse_json(remove_think_tags(raw))
+                lb = (parsed.get("label") or "").strip().strip("\"'")
+                if lb and len(lb) <= 80:
+                    candidate_labels.append(lb)
+            except Exception as e:
+                log_step("HIGH_LEVEL_LLM_ERROR", f"Cluster {cid} sample: {e}")
+        if not candidate_labels:
+            return f"Cluster {cid}", 1, "", []
+        prompt = high_level_synthesis_prompt(candidate_labels, research_question)
+        try:
+            raw = llm_invoke_with_skill(llm, "high_level_synthesis", prompt, cluster_id=cid)
+            parsed = clean_and_parse_json(remove_think_tags(raw))
+            label = (parsed.get("label") or "").strip().strip("\"'")
+            if not label or len(label) > 80:
+                label = candidate_labels[0]
+            confidence = parsed.get("confidence", 1)
+            if not isinstance(confidence, int):
+                try:
+                    confidence = int(float(confidence))
+                except (TypeError, ValueError):
+                    confidence = 1
+            confidence = max(1, min(5, confidence))
+            rationale = (parsed.get("rationale") or "").strip()
+            return label, confidence, rationale, candidate_labels
+        except Exception as e:
+            log_step("HIGH_LEVEL_LLM_ERROR", f"Cluster {cid} synthesis: {e}")
+            return candidate_labels[0], 1, "", candidate_labels
+
     # Fix up any clusters already in codebook but missing confidence entry (no LLM needed)
     for cid in list(codebook.keys()):
         if cid not in codebook_confidence:
@@ -174,19 +231,32 @@ def high_level_code_generation(
 
     _hl_lock = threading.Lock()
     workers = int(os.environ.get("GT_HIGH_LEVEL_WORKERS", "8"))
+    _use_nsampling = strategy == "nsampling"
+    _fn = _label_one_nsampling if _use_nsampling else _label_one
+    log_step(
+        "HIGH_LEVEL_STRATEGY",
+        f"strategy={strategy!r} | n_samples={n_samples} | sample_size={sample_size} | workers={workers}"
+        if _use_nsampling
+        else f"strategy={strategy!r} (first-30 default)",
+    )
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(_label_one, cid, codes): cid for cid, codes in pending.items()}
+        futures = {ex.submit(_fn, cid, codes): cid for cid, codes in pending.items()}
         for fut in as_completed(futures):
             cid = futures[fut]
-            label, confidence, rationale = fut.result()
+            result = fut.result()
+            label, confidence, rationale = result[0], result[1], result[2]
+            candidates = result[3] if len(result) > 3 else None
             with _hl_lock:
                 codebook[cid] = label
-                codebook_confidence[cid] = {
+                confidence_entry: Dict[str, Any] = {
                     "label": label,
                     "confidence": confidence,
                     "rationale": rationale,
                 }
+                if candidates is not None:
+                    confidence_entry["candidate_labels"] = candidates
+                codebook_confidence[cid] = confidence_entry
                 if confidence <= 2:
                     log_step(
                         "LOW_CONFIDENCE_CLUSTER",

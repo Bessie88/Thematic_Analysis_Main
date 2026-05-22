@@ -114,6 +114,24 @@ Output a single JSON object with:
 Output ONLY valid JSON, no other text. Example: {{"label": "Interface usability issues", "confidence": 4, "rationale": "Codes all relate to UI and usability."}}"""
 
 
+def high_level_synthesis_prompt(candidate_labels: list, research_question: str) -> str:
+    """Return the prompt that synthesizes n candidate labels into one final label/confidence/rationale."""
+    rq_line = f"\nResearch Question: {research_question}\n" if research_question else ""
+    bulleted = "\n".join(f"- {lb}" for lb in candidate_labels)
+    return f"""You are synthesizing multiple candidate labels for one cluster.
+Each label was generated from a different random sample of open codes within the same cluster.
+{rq_line}
+Candidate labels:
+{bulleted}
+
+Produce a single final label that best captures the overall theme across all candidates.
+If all candidates agree, confidence should be high (4-5).
+If candidates diverge significantly, reflect that with a lower confidence score (1-2).
+
+Output ONLY a single JSON object with keys: "label" (2-6 words), "confidence" (1-5), "rationale" (one sentence).
+Example: {{"label": "Interface usability issues", "confidence": 4, "rationale": "All candidates pointed to usability; minor variation in framing."}}"""
+
+
 def refine_cluster_assignments_prompt(label: str, bulleted: str, other_str: str) -> str:
     """Return the prompt for identifying codes that belong in another cluster (MOVE or NONE).
     other_str lists up to five alternate cluster labels (most similar to ``label`` by embedding).
