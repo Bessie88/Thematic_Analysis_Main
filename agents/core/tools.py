@@ -187,7 +187,9 @@ def high_level_code_generation(
             bulleted = "\n".join(f"- {c}" for c in sample)
             prompt = high_level_code_generation_prompt(bulleted, research_question)
             try:
-                raw = llm_invoke_with_skill(llm, "high_level_code_generation", prompt, cluster_id=cid)
+                raw = llm_invoke_with_skill(
+                    llm, "high_level_code_generation", prompt, cluster_id=cid
+                )
                 parsed = clean_and_parse_json(remove_think_tags(raw))
                 lb = (parsed.get("label") or "").strip().strip("\"'")
                 if lb and len(lb) <= 80:
