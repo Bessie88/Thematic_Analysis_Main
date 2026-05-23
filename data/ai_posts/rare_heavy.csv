@@ -1,0 +1,365 @@
+id,text,dimension,indicator,gold_all
+ap_001,"Gov job isnt going to let us connect to AI outside their network so im fine for now.
+
+Otherwise, it feels like a glorified web browser. And id rather not vet it like OP mentioned when i can see the website and instantly know how trustworthy the content is.",Review Friction,ai-content-detection,ai-content-detection
+ap_002,"I was just promoted to a more senior position so I do a lot more reviewing now and it appears I'm the just guy that reads and corrects the AI generated code from contractors.
+
+Sometimes they do a good job auditing the AI code but more often than not they don't, and those stupid comments are always a dead giveaway lol.",Review Friction,ai-content-detection,reviewer-burden|ai-content-detection
+ap_003,"// 💡 Intialize a new variable x to zero
+
+int x = 0;",Review Friction,ai-content-detection,ai-content-detection
+ap_004,"Not at all small org but at a large org that hires remotely.
+
+Tl;dr lots of interview rounds with plenty of face time and open ended system design and experience rounds that are hard to really cheat on.
+
+We’re also experimenting with allowing use of AI tools in coding interviews.
+
+As for sourcing? Good luck. It was shit before AI slop (due to bootcampers). It’s even harder now",Review Friction,ai-content-detection,slop-mitigations|ai-content-detection|workforce-disruption
+ap_005,"It's just another tech hype wave. Reality will be somewhere between total doom and boundless utopia. But probably neither of those.
+
+The AI thing kind of reminds me of the big push to outsource software engineers in the early 2000's. There was a ton of hype among executives about it, and it all seemed plausible on paper. But most of those initiatives ended up being huge failures, and nearly all of those jobs came back to the US.
+
+People tend to ignore a lot of the little things that glue it all together that software engineers do. AI lacks a lot of this. Foreigners don't necessarily lack it, but language barriers, time zone differences, cultural differences, and all sorts of other things led to similar issues. Code quality and maintainability took a nosedive and a lot of the stuff produced by those outsourced shops had to be thrown in the trash.
+
+I can already see the AI slop accumulating in the codebases I work in. It's super hard to spot a lot of these things that manage to slip through code review, because they tend to look reasonable when you're looking at a diff. The problem is all the redundant code that you're not seeing, and the weird abstractions that make no sense at all when you look at it from a higher level.",Review Friction,ai-content-detection,ai-content-detection|codebase-degradation|structural-drivers
+ap_006,"As you probably know most LLMs struggle hard if the code is:
+
+• Bespoke, or
+• the project is quite large
+
+The copilot ONLY focuses on the files that have changed and doesn't care about surrounding context, which is what is causing that 25%-50% miss chance, but at the same time for issues that don't need context it spots it, which incidentally is the area is where a lot of Reviewers might miss something.
+
+If there is a conceptual issue with the approach a reviewer will see that as it's quite obvious (writing a new function even though a helper already has one, using the wrong endpoint, thread safety, etc...) but for things like refactors where all you really need to look at is how it was and how it is now, or a lot of samey code where even the author might copy paste something wrong, or mess up paths, the AI will step in and catch it.
+
+As an example I had a PR which looked great, but AI noticed that one of the log messages had: Logger.Info($""Errors: {string.Join(',', ErrorList),}""
+That "","" comma at the end looks correct if you are not paying attention since it's just a log, but should not be there and copilot spotted that.
+
+TL;DR AI Reviewer is a great complement to a human reviewer as it does not ignore the little stuff where human brain might just gloss over, but at the same time wherever large context is required a human needs to step in. Funnily enough that is why I kind of despise AI written code because it is quite good at producing code chunks, which look good at first glance, makes it look like you can gloss over it, and then hides bugs there. Meaning areas of low confidence are obfuscated so you don't notice them and give it a bad score.",Review Friction,ai-content-detection,ai-content-detection|ai-limitations
+ap_007,"I keep trying to realize this fancy autocomplete and it just doesn't get there. My most recent foray was like this, I wanted to get Copilot to generate some tests that were going to be tedious to write. Primarily because I wanted to use extensive mocks, which I normally avoid.
+
+The generated result was really impressive, and I thought this was a turn of the corner for AI tooling.
+
+But then I continued and learned that copilot had made basically every mistake possible in those few hundred generated lines. By the time I had finished I had touched nearly all of them, and some of the mistakes were really sneaky and pernicious mistakes that no one would reasonably make when writing a test. Things like a test that elaborately ends up testing a tautology rather than the code under test.
+
+Overall every attempt I make leaves me distinctly unimpressed. To be really useful to me it needs to at least sometimes write something that works, and I have yet to receive this result despite many attempts.",Quality Degradation,ai-limitations,ai-limitations|codebase-degradation
+ap_008,"Depends what you use it for. Writing code? Yeah it's so much faster and easier to just do it yourself.
+
+Troubleshooting weird issues? It's surprisingly good for that. Even if 50% of its suggestions are useless and 80% don't work, it's still the same thing as you would have done by trying things mentioned in Github issues and Stack Overflow, but it saves you an hour or two of googling to get to these posts.",Quality Degradation,ai-limitations,ai-limitations
+ap_009,"Reviewing someone else's AI slop
+
+Someone on my team will publish a PR, it's like 1-2k lines of code and after looking at it for 5 minutes I can tell it's pretty much entirely AI generated.
+
+I don't inherently have anything against AI code, but what irks me is it's full of really obvious issues. For example there's lots of repetitive code in several places that could be moved to a single function.
+
+This is something I'd expect a junior to spot/fix and this person has like 4+ YoE so they should definitely know better. So they're either not reviewing their AI generated code whatsoever or they're a much worse engineer than I thought.
+
+Anyone dealt with something similar? Trying to figure out how to navigate this without causing the person to mentally check out due to me confronting them.",Quality Degradation,codebase-degradation,ai-content-detection|reviewer-burden|codebase-degradation|producer-comprehension-gap
+ap_010,"Manager isn't super technical and I'm the lead of the project so it's hard to know where the lines are drawn in terms of who should talk to him but I'll definitely escalate it if I can't get through to him.
+
+Merging in slop is a no-go. This project is way too high impact with a ton of visibility and a tight (yet not unreasonable) deadline so I can't afford to merge crap.",Quality Degradation,codebase-degradation,slop-mitigations|codebase-degradation
+ap_011,Yes the root cause is a bad engineer problem. But AI is enabling that bad engineer to produce terrible code 100x faster so it's a major contributor too,Quality Degradation,codebase-degradation,codebase-degradation
+ap_012,"Yup, it seems to have taken away the fun bit and given more of the bits I hated about dev from what I've seen so far.
+
+I didn't at first, but now I'm considering myself lucky that I work in a company that won't allow AI near their codebases (yet), so it's been business as usual for me.
+
+I have been using ai to bounce ideas and questions off though, example code snippets, link to relevant docs etc. But it's all browser based.",Forces and Consequences,craft-erosion,craft-erosion
+ap_013,"Lmaoooo.
+
+Unfortunately (for the people in hurry), good software cannot be done faster. Crafting good software takes time, and throwing in more ai generated garbage only makes things worse and slower",Forces and Consequences,craft-erosion,craft-erosion
+ap_014,"This to me is interesting when it comes to free software projects; sure there are a lot of people contributing as their day job. But if you contribute or manage a project for the pleasure of it, things which undermine your enjoyment - cleaning up AI slop - are absolutely a thing to say ""fuck off"" over.",Forces and Consequences,craft-erosion,reviewer-burden|craft-erosion
+ap_015,"It's refreshing to read this, this is exactly my experience with it so far. There's so much hype though I've been feeling like I was the only one. I also don't particularly care to spend so much of my time on prompt engineering. Improved inline code completion suggestions are great, but past that I'm not seeing these great productivity gains people go on about, and it's not very enjoyable.",Forces and Consequences,craft-erosion,craft-erosion
+ap_016,Some devs were vibe-coding long before LLMs were a thing,Forces and Consequences,craft-erosion,craft-erosion
+ap_017,"Yes. As my wife would say, the problem with AI is that people are busy making it ""create"" and I just want it to do the dishes -- so *I* can create.",Forces and Consequences,craft-erosion,craft-erosion
+ap_018,"Which is crucial, because what was rewarding about working with interns – the thing that always kept me going – was helping another human being launch their career, helping them become a better software developer. By contrast, there's nothing rewarding about explaining basic software development to an AI.",Forces and Consequences,craft-erosion,craft-erosion
+ap_019,Well at least we'll have work forever fixing the ai bugs. sounds awful though.,Forces and Consequences,craft-erosion,workforce-disruption|craft-erosion
+ap_020,"Oh you're missing the boat if you're not making this absolutely intentional. It is such a fantastic opportunity that you can't possibly pass this up. Four decade+ IT architect here. Just signed my first ever severance agreement in my entire career. I'm essentially done in 7 months. Being replaced by a crew of outsourced devs from India. Very nice people. I have no qualms with these folks. People need to earn a living around the world, and I am just fine with that.
+
+So I'm tasked with 'knowledge transfer' and of course 'getting sprint tasks completed' because nobody else can yet. Indeed the PR's are coming in from overseas, all AI generated. No surprises here. I fully expect that. The folks from overseas are not stupid. They know how to play the game. Especially with US based money flow.
+
+So (insert Mark Manson's 'Subtle Are of Not Giving a F*k') I start thinking to myself, why do I care so much? Is it because I poured my heart and soul into this code base? Giving it every bit of attention and honor that one would give to something that truly mattered? Or because I cared about the users of the app? Their lives? The impact they would have on others because this code base was of the best quality I could possibly produce? Yes, indeed that was the reason...but
+
+...capitalism doesn't care. So WHY...SHOULD...I?
+
+Introducing a $25.00/month Claude Code Pro subscription. Perfect! They want AI. They're going to get AI. And honestly it's been a JOY to BEHOLD such a fitting REVENGE!!! And so f'ing easy.
+
+I just let Claude Code SLOP IT OUT FOR ME. And it gets reviews and checked in!!!! The code works! Is it extendable? No. Does it fit into the context of the larger architecture? Just barely. Does it fit any overall standards? No. Does one function resemble another in terms of coding style and approach? Absolutely not! Is it code that will stand the test of time? Hell no. Will it be maintainable in a year? Not by anyone with less than 3 decades into the industry. And the list goes on, and on, and on of how this SLOP CRAP violates everything we have held to quality up until now.
+
+Are the capitalists happy? Of course they are! Look at how 'productive' I am now! I can bang out a new radio-set by lunchtime!!! Full stack!!!
+
+But the Beast lies waiting, for the future. Salivating. When the wall hits. When no one knows, anywhere how the overwhelmingly expensive codebase, got to the point where no change can be made to it, without the entire castle, falling to the ground like a house of cards.
+
+Live the dream! SLOP YOUR WAY OUT! We deserved better!",Forces and Consequences,craft-erosion,codebase-degradation|craft-erosion|mandated-ai-adoption|structural-drivers
+ap_021,"If I review (and rework) their code I can find the pieces of brilliance, where they encoded their deep understanding of the high frequency emitter and receiver even if the C is bad.
+
+I work as a firmware dev in power electronics where the EE PhDs write a lot of code, I feel this in my soul haha",Forces and Consequences,craft-erosion,craft-erosion
+ap_022,"I'm not passing judgement in that comment about if carefully crafting and curating code is a net win productivity wise over quickly churning out ai slop that is ostensibly viable long term.
+
+I _personally_ follow the careful crafting and review approach. I think a deep understanding of the systematic ideas underlying a project is critical to continuing to improve it effectively and I believe code that is easy to understand is extremely valuable for that. I'm my experience so far the ai stuff seems to create more, harder work for me in the long run and I end up with worse understanding after than if I just wrote it myself but I recognize that's just my person anedata so far and we're at the beginning of this ai coding landscape.
+
+I'm also open to the idea that lots of software we currently carefully craft by hand could likely be autogenerated ad hoc as needed. Moreover, good engineers are extremely expensive and most software is quite bad anyway so I expect there is a new balance to be found here.
+
+For my 2 cents, I'm not removing my or my company's ability to understand our own software in exchange for vendor lock in with ai (even if they weren't all owned by the current set of megalomaniacs) but I see the angles and I'm not afraid to consider the tradeoffs or have the conversation.",Review Friction,developer-accountability,reviewer-burden|developer-accountability|craft-erosion
+ap_023,"Had someone on my team excuse a bad idea because they ran with something AI suggested. I was like... Bruh I'm your manager I knew this was AI code when I reviewed it 🤣 I want to talk about the actual solution plz.
+
+We are AI positive as an org, but clearly the experience of the operator makes a big difference",Review Friction,developer-accountability,ai-content-detection|developer-accountability|producer-comprehension-gap
+ap_024,"Who cares if they mentally check out? They're either not capable or they're already mentally checked out to submit that PR in the first place. Don't accept it, and don't cover for them. Don't enable them to keep doing what they're doing.",Review Friction,developer-accountability,developer-accountability
+ap_025,"I guess have the team talk about how to handle PRs and AI in general, but if the dev can't be bothered to read their own PR then I don't know why they'd expect anyone else to.",Review Friction,developer-accountability,slop-mitigations|developer-accountability
+ap_026,"This is such a massive problem that it's baffling all these AI companies didn't seem to think ahead.
+
+This was the first thing I thought of when AI started gaining hype. How does ""AI"" sustain itself when its being deployed specifically to cut off its only ""food source"".
+
+AI training AI is such a catestrophic issue that no one is talking about.",Quality Degradation,knowledge-ecosystem-degradation,knowledge-ecosystem-degradation|ai-limitations
+ap_027,"I’ve experienced the exact opposite. I used to look for examples rather than read documentation. I was lazy and found documentation difficult to parse. I’ve found that resources to avoid reading documentation have only gotten better, especially with the ubiquity of youtube. I’ve always preferred articles to videos but there are so many videos that go into great detail about most topics you’d come across. Particularly in the web space. I assume this is a combination of the monetary incentive for video being so much higher and virtually everyone uses the internet daily. It’s probably the first software medium most people think of despite requiring an incredible volume of other software to even access the internet.
+
+Anyway, over time my skills in parsing documentation grew. Now I always reach for documentation first, then github stuff (issues, discussions, etc), then source code. If it takes me more than a few minutes to find what I need in the source then it’s time for google-fu. I chalk this up to experience dictating the benefits of understanding the “why” rather than just the “how” most tutorials and videos cover. I avoid places like Medium since they’ve always been majority low effort content since before AI. And I’m still not fond of video tutorials so maybe I’ve coincidentally avoided most of the slop you’re referring to.",Quality Degradation,knowledge-ecosystem-degradation,slop-mitigations|knowledge-ecosystem-degradation
+ap_028,"Content that kind of looks like technical docs, but without linking authoritative sources, date when it was last reviewed, software it was verified against etc.
+
+Nowadays with AI slop websites all over the place, plus formerly legitimate newspapers not attributing sources & edits either, this may not seem that special. But w3schools earned their reputation when that was exceptionally rude. Also, straight up wrong all over the place. But that is more of a symptom. And to be fair a lot of the software back then was straight up wrong, too. Tough job documenting the reality of the WWW correctly while IE was around.",Quality Degradation,knowledge-ecosystem-degradation,knowledge-ecosystem-degradation
+ap_029,"speaking out against AI fearmongering
+
+Hi guys, I would like to share some thoughts / rant:
+
+1. ai is a minuscule reason for layoffs. the real reason is the tax code change in 2017 ref and the high interest rate environment. it makes for a good excuse similar to RTO mandates to force people out voluntarily.
+
+2. all this ""ai choosing to not shut itself down"", using the terms like ""reasoning"", ""thinking"", ""hallucination"" is all an attempt to hype up. fundamentally if your product is good, you don't have to push the narrative so hard! does anyone not see the bias? they've a vested interest, they're not psychologists or have any background in neuroscience (at least i think)
+
+3. improvements have plateaued and increased hallucination reported is suspected to be ai slop feeding ai. they've started employing engineers because we've a ton of them unemployed to literally create data for ai to feed on. one of those companies is Turing
+
+4. personally, i use any of these tools for research / web search, affirming the concepts i've understood is inline and yet i spend so much time vetting the references and source.
+
+5. code prediction is most accurate on line by line basis, sure saves time from typing but if you can touch type, does it save a lot? you can't move it to higher ladder in value chain unless you've encountered a problem that's already solved because there's fundamentally no logic required to solve novel problems
+
+6. as an experienced professional, i spend most of my time thinking on defining the problem, anticipating edge cases and gaps from product and design team, getting it resolved, breaking down the problem, architecting, choosing design patterns, translating constraints to unit tests, implementing, deploying, testing, feedback loop, monitoring. fundamentally, ""code completion"" is involved in very few aspects of this effectively (implementing, maybe test cases as well?, understanding debug messages?)
+
+bottomline, i spend more time vetting than actually building. i could be using the tool wrong but if most of us (assuming) are facing this problem, we've to acknowledge the tool is crap
+
+what i feel sticking to just our community again, we somehow are more scared of acknowledging and calling it out publicly (including me). we don't want to appear like someone who's averse to change, a forever hater or legacy or deprecated in a way.
+
+every argument sounds like yeah it's ""shit"" but it's good for ""something""? really can't we just say no? are we collectively that scared of this image?
+
+i got rejected in an interview not primarily for not using ai enough. i'm glad i didn't join this company. cleaning up ai slop isn't fun!
+
+i understand we've to weather this storm, it would be nice to see more honesty around. or maybe i'm the doomer and i'm fine with it. thank you for your time!!!",Quality Degradation,knowledge-ecosystem-degradation,reviewer-burden|ai-limitations|knowledge-ecosystem-degradation|structural-drivers|workforce-disruption
+ap_030,"documentation has always been hit or miss, imo. I've chosen software specifically for the good documentation before!",Quality Degradation,knowledge-ecosystem-degradation,knowledge-ecosystem-degradation
+ap_031,"Maybe it will depend more on the API developers to document better now instead of relying on people figuring things out and tutorializing them in the future. It's just that for a lot of this stuff, code samples and tutorials are the best documentation since they decipher the cryptic API descriptions into something more concrete.",Quality Degradation,knowledge-ecosystem-degradation,knowledge-ecosystem-degradation
+ap_032,"Lmfao. We had a guy do this and make hundreds of ""docs"" pages of fluff from Claude with maybe 1 or 2 pages of actual information.",Quality Degradation,knowledge-ecosystem-degradation,ai-content-detection|ai-limitations|knowledge-ecosystem-degradation
+ap_033,"Also the idea of the post is to get answers on how people deal with it, regardless of the company context.
+
+By finding a new company.
+
+There's no way this will be changed unless you are at the C-level yourself.",Forces and Consequences,mandated-ai-adoption,mandated-ai-adoption|workforce-disruption
+ap_034,I'm sure there're smaller companies having the same mandate or management just assuming devs should be 100x better with AI. Considering the compensation Microsoft employees are getting vs smaller companies it doesn't seem so bad.,Forces and Consequences,mandated-ai-adoption,mandated-ai-adoption|structural-drivers
+ap_035,"> If you don't like something, don't buy it.
+
+The OP's point is that increasingly, we don't have that choice, for example, because AI slop masquerades as if it were authored by human beings (that's, in fact, its purpose!), or because the software applications you rely on suddenly start pushing ""AI companions"" on you, whether you want them or not, or because you have no viable alternatives to the software applications you use, so you must put up with those ""AI companions,"" whether you want them in your life or not.",Forces and Consequences,mandated-ai-adoption,trust-erosion-in-collaboration|mandated-ai-adoption
+ap_036,"Feels intentional. If a mandate form management was ""now you have to use AI on 20% of PRs"" I can see how people would just do as ordered to prove a point (I know I would).",Forces and Consequences,mandated-ai-adoption,mandated-ai-adoption
+ap_037,"My company (huge one, lots of departments, products, processes) had for a few years a ""fast code solutions"" team to quickly automate all kinds of processes in easy to use application and do it as fast as possible. These apps get churned out SO quickly by a combination of low code engineers, off shore engineers and AI. Then it gets handed over to the functional service management team who when they have to manage it find out its not performing and when they do their quality control audit find the code is often horrendous. They have a few senior developers on hand to clean up all this slob of code before they want to take over the functional management of these applications.",Forces and Consequences,mandated-ai-adoption,codebase-degradation|mandated-ai-adoption|structural-drivers
+ap_038,"I'm not that sure about AI devs knowing anything relevant about actual software engineering. My experience with them is that they are usually completely oblivious to existing algorithmic solutions to many problems and always default to AI for anything remotely complex. Yesterday I had to instruct some of them about BK trees and Levenshtein Distance algorithm variants in a meeting because they wanted to rely on a remote LLM to perform a fuzzy search on some keywords, and ultimately convinced them to use aspell, at least I hope. The only reason why I did not literally facepalm after hearing about their idea was being on camera.
+
+While the C-suites over the world are certainly excited about the idea of replacing us with AI, many in our field are happily contributing to that future themselves by letting AI do their own job and slowly let their brains rot away. Personally I'm not complaining, because I'm not caving in to this, and my prediction is that in the future AI slop will be consuming mostly AI slop so those of us who keep training our skills will become exceptionally relevant to undo the resulting mess.",Quality Degradation,producer-comprehension-gap,producer-comprehension-gap|skill-atrophy|workforce-disruption
+ap_039,"Yes, there is content produced but not reviewed today that simply would not have been produced before. There are also lots of FOSS projects that aren’t used by the author. This is the era of AI 🙄",Quality Degradation,producer-comprehension-gap,knowledge-ecosystem-degradation|producer-comprehension-gap
+ap_040,"Yes, that seems right . From my experience there are many non technical people in companies “vibing prototypes” , then they bring in a dev to build it",Quality Degradation,producer-comprehension-gap,producer-comprehension-gap
+ap_041,"So basically because the AI slop user is lazy, the OP now needs to do additional extra work to fight the lazy no effort AI slop?
+
+How exactly does that scale?",Review Friction,reviewer-burden,reviewer-burden
+ap_042,the amount of code it wrote in the first PR is dwarfed by the amount of comments needed to try and steer it in the right direction and it's still failing the laundry list of PR checks.,Review Friction,reviewer-burden,reviewer-burden|ai-limitations
+ap_043,The fact that it would take someone like 15 minutes to fix some of the shit that it's taking copilot like 12 iterations of throwing its robot feces at the PR and hoping it sticks is incredible.,Review Friction,reviewer-burden,reviewer-burden|ai-limitations
+ap_044,"I totally agree with you. I use these tools everyday in work as well as personal life. If your problem is already solved and available on the internet, it will help you find faster else it is just waste of time. It is also good at following patterns, so you can feed it examples of something you have already done and wait till generates the output and change it as per your need.
+
+I don't offload it any logical tasks though, as it will train my brain to be lazy, it is just a probabilistic word predictor, most of the time it will be wrong. Plus the reliability of these tools are very low for slightly involved tasks.
+
+The key benefit here is you can use it to quickly onboard to a new technology or help you understand a codebase faster",Quality Degradation,skill-atrophy,ai-limitations|skill-atrophy
+ap_045,Where will AI/ML get the training data if all they are trying to do is replace the people who generate that data? Seems like a futile endeavour,Quality Degradation,skill-atrophy,ai-limitations|skill-atrophy
+ap_046,this - together with the junior gap - is going to fuel the next upward cycle,Quality Degradation,skill-atrophy,skill-atrophy|workforce-disruption
+ap_047,"The question is are you actually using a tool, learning how to use a chainsaw? When the AI gives you finished product?",Quality Degradation,skill-atrophy,skill-atrophy
+ap_048,"Yes it is fundamentally different, because you ultimately need to synthesize the information you get from web searches.
+
+LLMs can make the random shit you copy paste from StackOverflow compile/run and sort of work without any critical thinking on your part.
+
+Using it like a more targeted search/SO is a different thing from what is being discussed here.",Quality Degradation,skill-atrophy,skill-atrophy
+ap_049,"Tech debt is going to be wild in a few years to untangle the mess. And by then, there will be even fewer competent devs.",Quality Degradation,skill-atrophy,codebase-degradation|skill-atrophy
+ap_050,"humanity is doomed, people are getting dumber every second, the vast majority lacks intelligence to observe themselves and their change in behaviour or addictions (social media, tiktok, outsourcing thinking) ...
+
+I just try to avoid those people to keep myself sane",Quality Degradation,skill-atrophy,skill-atrophy
+ap_051,"I found another dotnet PR and the discussions there even more fascinating than those in the OP's post:
+
+https://github.com/dotnet/runtime/pull/115826#discussion_r2101184599
+https://github.com/dotnet/runtime/pull/115826#discussion_r2100416144
+https://github.com/dotnet/runtime/pull/115826#discussion_r2100729187
+
+Just imagine the amount of time spent in order to provide such extremely detailed, step-by-step instructions to your newly hired junior dev - a junior dev who will never actually learn, won't improve their cognitive abilities, and so on",Quality Degradation,skill-atrophy,reviewer-burden|ai-limitations|skill-atrophy
+ap_052,"This about sums up my experience with AI, it requires far more time trying to get an LLM to do anything useful compared to just doing it yourself. There's also the added enormous downside in that you haven't built a good solid structural understanding of what's going on when you use an AI to do something, so you have no real clue if what's happening is actually correct - or if you've missed some subtle details. This leads to the quality of the code degrading in the long term, because nobody has any clue what's going on
+
+AI being used like this is a fad, because corporate managers are desperate to:
+
+1. Try and justify the enormous expenditure on AI
+2. Replace most/all their programmers with AI
+
+Neither of these are going to pan out especially well. AI currently is best used as more advanced autocomplete, which isn't the answer management wants
+
+Its also clear that the push internally in microsoft for AI is absolutely not coming from developers and its being foisted on them, which is never a good sign for a company's long term prospects",Quality Degradation,skill-atrophy,reviewer-burden|ai-limitations|skill-atrophy|producer-comprehension-gap|codebase-degradation|structural-drivers|mandated-ai-adoption
+ap_053,"I want to think its the same, but I really do think LLMs change the game.
+
+I think its different in the sense that you can create such highly contextually relevant code, within your own codebase, that will likely run/compile/execute, completely circumventing the potential for gaining that deep knowledge that comes with piecemealing things together until you realize you're learning about data structures before you know it. I have, just for fun, tried the ""vibe code"" workflow where I just keep asking for more and feeding the errors in, and it often can get to a point where it ""works"", but oh my...it looks like a bomb went off in the codebase.
+
+This is the real dangerous place these tools are placing many devs who just don't know any better and are more tempted to get a working result than figure it out. In the past with S.O., they basically had to figure it out to some degree, nobody was going to do the work for them. Now, something will.",Quality Degradation,skill-atrophy,skill-atrophy|codebase-degradation|ai-limitations
+ap_054,"Indeed. With AI juniors can create horrible software faster, and in bigger quantities. Based on my experience AI really only enhances your existing talent, and if you have none, it enhances the lack of it, since you still need to be able to know how your AI slop fits in the larger system, but if you're a junior you most likely don't know that. Couple that with skipping the step where you must actually understand what you copy and paste from the internet for it to work, you also lengthen the time it takes for a developer to actually level up, since they do much less actual learning.
+
+That's at least my experience working with multiple digital agencies and seeing it all unfold. Most juniors don't last long these days precisely because they skip the part that actually makes them valuable - storing information in their head. And that's concerning, because if to make actually good use of AI you have to be an experienced engineer, but to become an experienced engineer you had to get there without AI doing all your work for you, then how are we going to get new experienced engineers?",Quality Degradation,skill-atrophy,skill-atrophy|producer-comprehension-gap
+ap_055,"I have a colleague who also likes to push AI generated solution and fully rely on a human eye of the team, moreover each review comment he gives again to AI to tackle it which is insanely irritating
+
+His point is that being on another level of productivity and deliver faster is more important rather then write good human readable code
+
+I'm personally more for the balance: AI is great, but you should still be able to read, write and support it without AI in any moment of time",Quality Degradation,skill-atrophy,reviewer-burden|producer-comprehension-gap|skill-atrophy
+ap_056,"It's a solid advice for ""beginners"". It's basically the same as the old ""build your own project at some point instead of just following the tutorial""
+
+As with anything that provides results it's easy to skip the understanding and learning part.",Quality Degradation,skill-atrophy,skill-atrophy
+ap_057,"It's much worse than juniors using stackoverflow, IMO. Looking up a problem on SO is, to my mind, a totally valid way of learning new things. You are almost guaranteed not to find an answer that matches your own problem perfectly (unless it's trivial or super fundamental), so you're forced to adapt the answer to your own situation. So you gain some knowledge and apply it in the real world - to my mind, that's a valid form of learning. The more experience you gain, the better you are at parsing and judging answers from SO, and understanding the comments and corrections in those threads.
+
+AI is different because it always gives an answer specific to your problem; it essentially never seeks clarification from you; it doesn't allow for comments or corrections from experienced people; and it often encourages you to use it as a perpetual substitute to learning how to do things yourself.
+
+Essentially, using SO is finding out how to do something. Using AI is getting the model to do it for you. I feel like that's a substantial difference.",Quality Degradation,skill-atrophy,skill-atrophy|ai-limitations
+ap_058,"Every time I try to use LLMs to help me go faster it has slowed me down. I hear people saying that it speeds them up so at this point I'm wondering if maybe I'm just holding the chainsaw at the wrong end and complaining about how horrible of a chainsaw it is because my hands keep getting all cut up.
+
+For example, yesterday I tried to use LLMs to write some tests for some code I had written. I needed the tests to be structured a certain way so we could add new tests easily as we added new implementations of a class. It totally fell over and didn't give me what I needed.
+
+Do you have any resources you've used to help use LLMs correctly?
+
+As an aside, as I was writing the tests, it gave me some ideas on how I could improve the code. That probably wouldn't have happened if it had generated the tests. So even if it had worked I feel like I'd have been worse off because I missed out on code improvements that became more obvious as I wrote the tests.",Quality Degradation,skill-atrophy,ai-limitations|skill-atrophy
+ap_059,"I feel like this approach to AI is also built on the assumption that AI will eventually get so good it doesn't need supervision (which, ehhh, I have my doubts)
+
+More likely, you will still need some form of supervision years from now - at the very least so you can hold someone accountable when shit goes south - so how do we get young people interested in becoming programmers who can do that job? Is anyone gonna spend years learning how to write good code and build a passion for good software design, only to never get to use it?
+
+MORE LIKELY, the young people will use AI to pass their exams to get the job, then they will ask the AI to code review the other AI (both of which are trained mostly on slop code) and then we're left with a multistory pile of slop and the only person left to blame for the slop not working correctly is the graduate who doesn't even understand basic programming, ahhhhh what even is this futureee",Quality Degradation,skill-atrophy,skill-atrophy|ai-limitations|codebase-degradation
+ap_060,My company is working with contractors who are using AI IDE's and it's wild watching their brains rot in real time. I asked one of them a question (because they're supposedly more experienced in JS than I am) and all he did was ask his AI and it spit out the wrong answer.,Quality Degradation,skill-atrophy,skill-atrophy|producer-comprehension-gap|ai-limitations
+ap_061,"The future is bright for us geezers who learned and grew in an LLM-less environment. I'm frightened for the next generation that will be conditioned to shortcut and slap together and pray. I've already got coworkers who feed their entire day into an LLM and are incapable of producing a single, unique thought.
+
+It would also be nice if we stop thinking about AI as singularly LLMs, but I'm going to be dealing with that one for a while.",Quality Degradation,skill-atrophy,skill-atrophy|producer-comprehension-gap
+ap_062,"I just ignore the fear mongering at this point. It's a constant thing on LinkedIn.
+
+9/10 times if someone is pushing AI, they're a vibe coder or have a ""no code coder consultant"" kind of business
+
+The 1/10 times it's an actually good dev saying ""yeah ai won't replace us but it's worth using it as a tool to make you better. Just be careful as it can stop your skill growth""",Quality Degradation,skill-atrophy,skill-atrophy|structural-drivers
+ap_063,"At my last job all the other devs and the cto got way in to ai and pretty much just stopped writing any code.
+
+Shit started breaking left and right and they just kinda stopped caring",Quality Degradation,skill-atrophy,codebase-degradation|skill-atrophy
+ap_064,"it will also make bad devs more ""productive"" so the high achievers will lessen in value
+
+i'm already seeing changes in my psychology regarding learning, everytime I have a problem, I hesitate in using chatgpt or reading.. and it takes an effort now.. not far from the feeling of doomscrolling or not.",Quality Degradation,skill-atrophy,skill-atrophy|workforce-disruption
+ap_065,Have no fear! Most of the devs in training are lost without AI.,Quality Degradation,skill-atrophy,skill-atrophy
+ap_066,"This is one side and there will be another big consequence, I don't wanna know the quality of a junior engineer or a fresh grad right now, I don't blame them but they born into AI era. And if we consider that companies did not hire them due to layoffs and AI there will be shortage of decent juniors and there will be also a lot of exits from the sector. It looks like senior engineers will be extremely valuable to fix the mess created by AI hype in the short and middle term",Quality Degradation,skill-atrophy,skill-atrophy|workforce-disruption
+ap_067,"Hi, I'm one of the tenth guys.
+
+I usually don't get so opaque about ""it's worth using as a tool, but be careful because it can stop skill growth"". I'm quite clear that it's a barely adequate replacement for Google your question with ""site:stackoverflow.com"". It's great at providing examples when Stack Overflow's answer gets a bit heady and theory heavy.
+
+Skills are built through practice. You need to do the typing exercise. It's a part of the process of learning.",Quality Degradation,skill-atrophy,ai-limitations|skill-atrophy
+ap_068,"That is, to me, a very stark illustration of the difference between renting your flat versus having a mortgage on your flat.
+
+Yes, renting a flat gets me shelter and warmth. So does buying it with a mortgage. But the latter builds towards ownership and the former does not.
+
+Yes, using this tool gets me low-effort PRs done. So does employing a junior. But the latter builds towards my company succeeding by growing talent and knowledge and the former does not.",Quality Degradation,skill-atrophy,skill-atrophy
+ap_069,"We recently had someone on our podcast who's working on a 'composable software' solution to address exactly this issue (the company's called Bit Cloud if you wanna check it out). Non-technical vibecoders will continue to muck up codebases until a solution is found. Not sure if composable software is that solution, but it sure was interesting.
+
+It seems like the role of software developers is heading towards more of an orchestration direction vs. an actual creation direction. Very curious to see how the next generation of developers works. Pretty concerned they won't know how to code at all, but who's to say?",Quality Degradation,skill-atrophy,skill-atrophy|codebase-degradation|workforce-disruption
+ap_070,"The number of times ChatGPT has suggested using ""setTimeout"" unironically to fix a legitimate issue makes me terrified of what I'm going to find in codebases over the coming years with all these AI slop.
+
+This whole manual PR approach doesn't work if people are allowed to commit tons of generated code. No time will be saved. The dev using the LLM for generating is already a reviewer in this case.
+
+Maybe let the LLM review the PR. And the reviewing dev will only look at the warnings, and decide to approve/return the PR.
+
+If you can't blindly push most of the generated source-code, there will be no ""productivity gains"". And the team is slowly being de-skilled. Congratulations. Just try to get the hell out of Vibecoder-Teams.
+
+I use CodeRabbit for my open source project and its looks good so far. Its give details feedback which can be leverage to enhance code quality and handling corner cases.",Quality Degradation,skill-atrophy,slop-mitigations|ai-limitations|codebase-degradation|skill-atrophy
+ap_071,"Too many business owners are oversold with AI prospects. In the next 5 years, no one will learn how to code properly anymore",Quality Degradation,skill-atrophy,skill-atrophy|structural-drivers
+ap_072,"I mean if he just sits with the guy for a couple of hours as a one time thing, it isn't like he is stuck with some person who doesn't speak the same language and they just can't communicate or something.
+
+This just seems a bit over the top of an analysis for something that the person can change their behavior if it's a reviewer and reviewee type dynamic.
+
+If dude just keeps submitting shit after that then that is a different story, but call em on the slop and talk about better ways to use the ole' AI",Review Friction,slop-mitigations,slop-mitigations
+ap_073,Ask him if he even reviewed his own PR,Review Friction,slop-mitigations,slop-mitigations
+ap_074,"AI Slop PR's are burning me and my team out hard, anyone else experiencing this?
+
+Background: Current role is a TL (dev/manager hybrid at this place), my team has a large amount of domain ownership so we are constantly pinged for PR reviews.
+
+Lately there has been a huge push for teams to adopt tools like Cursor, the problem is that while yes they can generate code, it is just lately rapidly becoming an endless stream of AI slop.
+
+In the last few weeks:
+
+Multiple 5k+ line PR's that should be sub 100 lines
+PR's that have tons of changed files that in some vibe coding iteration were dropped or my new favourite thing endless redirection where multiple things don't actually do anything.
+Very scary PR's where the AI did something extremely dangerous i am assuming to make tests work or something. For example one of the PR's actually did such a very subtle change where it aborted early in a middleware basically skipping most of AuthZ, then mocked out a good chunk of the AuthZ in tests which caused tests to pass.
+AI hallucinating external services, then mocking out the hallucinated external services. Forcing me to go look up other repos/service maps and validate that yes this api endpoint actually exists.
+AI's ignoring project architecture and structure, dumping files everywhere, or ignoring coding styles.
+
+The problem is that these PR's are becoming exhausting as they keep touching on my teams domain, so we are required to review and approve them. Pretty much nobody wants to talk about this, nobody wants to discuss this fact. Today a junior came and dropped a 10k PR that is just all over the place, i just rejected it, pretty saying ""this issue does not need 10k LoC changed, and i am not going through this.""
+
+However instead of well addressing the issues of lack of critical thinking or just copy and pasting a story in, instead i am getting push back for being too strict. My entire team has been complaining about this, on average my team of 6 is getting around 30 PR's a day from various teams now.
+
+EDIT To clarify a few things:
+
+I have told them my issues in detail with other managers this specifically affects my team and a few others who are not discrete feature specific teams as our domain is much larger. Most don't care since it doesn't actually affect them and they specifically care about increasing their own velocity. Our bosses do not care and just want us to go faster.
+We have several large monolith java applications, these code bases are not pretty but do have a decent test suite. Cursor specifically has huge issues with some of these project's structure where it will often just stuff into the first folder with a matching name it seems to find.
+We do have code rules however they are nowhere near as well documented and enforced.",Forces and Consequences,structural-drivers,reviewer-burden|codebase-degradation|ai-limitations|mandated-ai-adoption|structural-drivers
+ap_075,"This is pretty horrific, Microsoft been doing AI PR stunts for a while now. Reminds Google with their image generation fiasco.",Forces and Consequences,structural-drivers,structural-drivers
+ap_076,"Every time somebody sees shitty, junior-level code now, they just will assume it is AI.",Review Friction,trust-erosion-in-collaboration,trust-erosion-in-collaboration|ai-content-detection
+ap_077,When the comment smells like AI but I just can't prove it,Review Friction,trust-erosion-in-collaboration,ai-content-detection|trust-erosion-in-collaboration
+ap_078,"It also let them muddle the true origin of the bug report. Then they can claim ""wide adoption"" and ""usefulness"".",Review Friction,trust-erosion-in-collaboration,trust-erosion-in-collaboration|structural-drivers
+ap_079,"Interestingly, github UI doesn't let me filter by autor Copilot, so I cannot see how many are open/closed/draft",Review Friction,trust-erosion-in-collaboration,trust-erosion-in-collaboration|ai-content-detection
+ap_080,"This is a recent comment from one of the PR links above. Summarizes our emotions neatly:
+
+QUOTE
+
+As an outside observer but developer using .NET, how concerned should I be about AI slop agents being let lose on codebases like this? How much code are we going to be unknowingly running in future .NET versions that was written by AI rather than real people?
+
+What are the implications of this around security, licensing, code quality, overall cohesiveness, public APIs, performance? How much of the AI was trained on 15+ year old Stack Overflow answers that no longer represent current patterns or recommended approaches?
+
+Will the constant stream of broken PR's wear down the patience of the .NET maintainers?
+
+Did anyone actually want this, or was it a corporate mandate to appease shareholders riding the AI hype cycle?
+
+Furthermore, two weeks ago someone arbitrarily added a section to the .NET docs to promote using AI simply to rename properties in JSON. That new section of the docs serves no purpose.
+
+How much engineering time and mental energy is being allocated to clean up after AI?
+
+UNQUOTE",Review Friction,trust-erosion-in-collaboration,trust-erosion-in-collaboration|reviewer-burden|codebase-degradation|knowledge-ecosystem-degradation|mandated-ai-adoption
+ap_081,"So .NET 9 IS LTS and maybe final for me.
+
+Stephen Toub's comment:
+
+The stream of PRs is coming from requests from the maintainers of the repo. We're experimenting to understand the limits of what the tools can do today and preparing for what they'll be able to do tomorrow. Anything that gets merged is the responsibility of the maintainers, as is the case for any PR submitted by anyone to this open source and welcoming repo. Nothing gets merged without it meeting all the same quality bars and with us signing up for all the same maintenance requirements.
+
+@davidfowl and I gave a talk on Monday about how .NET 10 has already benefited from using such tools, if anyone is interested.
+https://m.youtube.com/watch?v=gieL0bxyTUU",Review Friction,trust-erosion-in-collaboration,trust-erosion-in-collaboration|developer-accountability
+ap_082,I really love .NET but I think I might have to start advocating for different tech stacks if this is what they're going to make.,Review Friction,trust-erosion-in-collaboration,trust-erosion-in-collaboration|codebase-degradation
+ap_083,"my biggest fear about all this is it incentivizes people to steal my github/linked/etc and then if i lose it how do i prove im not a bot myself.
+
+ive interviewed at startups while running my agency. most of them have an in person round. I am yet to see a completely remote process. one client even flew me out to talk about IRL role.
+
+most of my agency clients require at least video call as well",Review Friction,trust-erosion-in-collaboration,trust-erosion-in-collaboration|slop-mitigations|workforce-disruption
+ap_084,"Fight AI with AI? Use your own AI tool to give very strict code reviews.
+
+But forgetting the AI part, 30 PRs a day from outside your team is a lot, especially if they're not trivial. That sounds like you might want to rethink where code should live if so many teams need to make large changes to your team's code to get their work done.",Review Friction,trust-erosion-in-collaboration,slop-mitigations|trust-erosion-in-collaboration
+ap_085,"That's kind of how I've been handling it currently
+
+• reviewed the first revision entirely, pointing out lots of things for improvement
+• they make changes that kind of do what I asked
+• review it again and see that although they definitely addressed some stuff, their new generated code still had lots of very similar issues
+
+I was hoping me saying ""let's abstract duplicate code"" would mean they'd be wary of that in the future but I think I'm just seeing whatever the AI spits out with no real human in the loop.
+
+My guess is they're feeding my PR comments to the LLM and committing whatever changes it makes as a result.",Review Friction,trust-erosion-in-collaboration,reviewer-burden|trust-erosion-in-collaboration|producer-comprehension-gap
+ap_086,"I'm fearing that AI will enable the mediocre people to pose as experts much more confidently, to a level where a side observer will not be able to tell a difference.",Review Friction,trust-erosion-in-collaboration,trust-erosion-in-collaboration|producer-comprehension-gap
+ap_087,they don't trust the devs. they likely have expectations that aren't reasonable for the situation.,Review Friction,trust-erosion-in-collaboration,trust-erosion-in-collaboration|mandated-ai-adoption
+ap_088,"Deal with it like it's code. When someone at my company contributes code, they create a pull request, and the code is reviewed, and they need to make any requested changes and resubmit. Do that, but also track how much time it takes you to do the reviews.
+
+They'll quickly get upset about the requested changes, and suggest that instead of asking them to do it again, ""can't you just make the changes?"". When that happens, point out that yes, you can make the changes, and yes, that would be faster. Then, gently lead them to what they've just proven: using AI to generate code requires more developer hours than using developers to write code.",Review Friction,trust-erosion-in-collaboration,slop-mitigations|reviewer-burden|trust-erosion-in-collaboration
+ap_089,"A dev I really rate has started using A.I. to reply to us and I am trying to find a tactful way of saying that his old communication style of 'yup', 'nup' and 'fixed, take a look' was preferable to screeds of ""great question, it's important to have your php version up to date and here's why....So now that you understand why it's so vital to have xyz, here's my game plan for how I think you can proceed from here for optimal success with...""",Review Friction,trust-erosion-in-collaboration,ai-content-detection|trust-erosion-in-collaboration|ai-limitations
+ap_090,"I wish I had an answer for you. We are receiving 300-400 applications for in-office/hybrid positions.
+
+I'm meeting with my HR recruiter on Monday to figure out how we weed through hundreds of applications as we open more positions. The hiring process is broken right now and HR seems to have fallen asleep at the wheel.",Forces and Consequences,workforce-disruption,workforce-disruption
+ap_091,"It is relevant to hiring though, because the sea of garbage applications you're wading through is bottom feeding offshore scalpers. That's the point. If we shut off the spigot to these people, and hire in our own nation exclusively, most of these problems would be instantly solved.",Forces and Consequences,workforce-disruption,workforce-disruption|structural-drivers
+ap_092,"AI slop and SEO are absolutely part of it, but another thing to consider is that the DevRel field was absolutely gutted in the layoffs starting in 2022. It's always been hard to measure the impact of DevRel so when it came time to make cuts, those teams got the axe. They were the ones maintaining docs and code examples and demo repos and interactive demos. They were the ones making sure the SEO'd articles and blog posts actually had quality content with code snippets that ran. The DevRels who were great at all that work but didn't have enough name recognition to essentially be influencers went back to IC engineering roles.
+
+I don't want to put blame on the remaining DevRels, there's a place for influencer-style work. But I doubt most of them have the bandwidth to maintain the spawl of docs and demos. Plus I'm sure some companies eliminated DevRel entirely and now expect Customer Architects or whoever to do it all.
+
+That's my perspective from someone who briefly worked in DevRel and made a lot of friends in the field, though I'll admit that I haven't followed it closely since going back to IC engineering work.",Forces and Consequences,workforce-disruption,knowledge-ecosystem-degradation|structural-drivers|workforce-disruption
