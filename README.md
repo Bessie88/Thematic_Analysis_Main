@@ -4,6 +4,44 @@ This repository implements an **agentic grounded-theory (GT) workflow**: unstruc
 
 ---
 
+## Developer quickstart
+
+### Before pushing / opening a PR
+
+Run these from the repo root:
+
+- `make fix` (auto-fix lint + format)
+- `make check` (lint check + format check + tests)
+
+Equivalent direct commands:
+
+- `ruff check --fix agents/core tests`
+- `ruff format agents/core tests`
+- `ruff check agents/core tests`
+- `ruff format --check agents/core tests`
+- `pytest`
+
+### Open-coding validator toggle
+
+Validator usage is controlled by a single boolean in `agents/core/state.py`:
+
+- `USE_OPEN_CODES_VALIDATOR = True` -> run `validate_open_codes` and retry on FAIL
+- `USE_OPEN_CODES_VALIDATOR = False` -> skip validator and accept first open-coding pass
+
+`agents/cli.py` logs this mode at runtime as `OPEN_CODING_VALIDATOR`, so it appears in terminal/Slurm output.
+
+### High-level cluster-label strategy
+
+The high-level label generation strategy is configured in `agents/core/tools.py` and can be changed via env vars:
+
+- `GT_HIGH_LEVEL_STRATEGY` (`nsampling` default, or fallback first-30 strategy)
+- `GT_HL_N_SAMPLES` (default `5`)
+- `GT_HL_SAMPLE_SIZE` (default `15`)
+
+The active strategy is logged as `HIGH_LEVEL_STRATEGY` during runs.
+
+---
+
 ## Pipeline overview
 
 The diagram is a single-page map of how data moves through tools and artifacts (codes → clusters → hierarchy → meta-themes → global graph). Use it when onboarding to the repo or when tracing which stages feed which intermediate JSON under `agents/outputs/data/`.
