@@ -22,6 +22,9 @@ from .utils import log_step, remove_think_tags
 # Max retries when validator returns FAIL (open coding)
 OPEN_CODING_MAX_RETRIES = 2
 
+# Set False to skip validate_open_codes and accept the first open_coding output per review.
+USE_OPEN_CODES_VALIDATOR = False
+
 # Name -> callable; tool_node uses this to invoke the right tool from state["tool_call"]
 TOOLS = {
     "open_coding": open_coding,
@@ -74,7 +77,8 @@ def agent_node(state: GTState):
 
     # --- Open coding: retry with feedback when validator said FAIL ---
     if (
-        state.get("open_codes_validation") == "FAIL"
+        USE_OPEN_CODES_VALIDATOR
+        and state.get("open_codes_validation") == "FAIL"
         and retries < OPEN_CODING_MAX_RETRIES
         and state.get("raw_text")
     ):
@@ -95,7 +99,8 @@ def agent_node(state: GTState):
         }
     # --- Open coding: after codes exist, run validator (if not yet run) ---
     if (
-        state.get("open_codes")
+        USE_OPEN_CODES_VALIDATOR
+        and state.get("open_codes")
         and state.get("open_codes_validation") is None
         and not state.get("all_codes_for_axial")
     ):
@@ -110,6 +115,14 @@ def agent_node(state: GTState):
             },
             "step": step,
         }
+    # --- Open coding: validator disabled — accept first pass without LLM review ---
+    if (
+        not USE_OPEN_CODES_VALIDATOR
+        and state.get("open_codes")
+        and state.get("open_codes_validation") is None
+        and not state.get("all_codes_for_axial")
+    ):
+        return {"open_codes_validation": "PASS", "step": step}
     # --- Open coding: first call for this review (no feedback) ---
     if not state.get("open_codes") and state.get("raw_text"):
         return {

@@ -11,6 +11,7 @@ import pandas as pd
 
 from agents.core.app import app
 from agents.core.cooccurrence import write_cooccurrence
+from agents.core.state import USE_OPEN_CODES_VALIDATOR
 from agents.core.paths import (
     CLUSTERED_CODES_PATH,
     CODEBOOK_PATH,
@@ -162,6 +163,10 @@ def main() -> None:
     ensure_output_dirs()
     rq = args.research_question
     log_step("RESEARCH_QUESTION", rq)
+    log_step(
+        "OPEN_CODING_VALIDATOR",
+        "enabled" if USE_OPEN_CODES_VALIDATOR else "disabled",
+    )
 
     if args.high_level_only:
         if not CLUSTERED_CODES_PATH.is_file():

@@ -30,6 +30,7 @@ def test_agent_node_schedules_open_coding():
     assert out["tool_call"]["args"]["text"] == "review"
 
 
+@patch("agents.core.state.USE_OPEN_CODES_VALIDATOR", True)
 def test_agent_node_schedules_validate_after_codes():
     out = agent_node(
         {
@@ -41,6 +42,47 @@ def test_agent_node_schedules_validate_after_codes():
     assert out["tool_call"]["tool"] == "validate_open_codes"
 
 
+@patch("agents.core.state.USE_OPEN_CODES_VALIDATOR", False)
+def test_agent_node_skips_validate_when_disabled():
+    out = agent_node(
+        {
+            "raw_text": "review",
+            "research_question": "RQ?",
+            "open_codes": "- Code: foo",
+        }
+    )
+    assert "tool_call" not in out
+    assert out["open_codes_validation"] == "PASS"
+
+
+@patch("agents.core.state.USE_OPEN_CODES_VALIDATOR", False)
+def test_agent_node_skips_retry_when_disabled():
+    out = agent_node(
+        {
+            "raw_text": "review",
+            "research_question": "RQ?",
+            "open_codes": "- Code: foo",
+            "open_codes_validation": "FAIL",
+            "open_codes_validation_feedback": "too vague",
+            "_open_coding_retries": 0,
+        }
+    )
+    assert "tool_call" not in out
+
+
+def test_router_end_when_validator_disabled():
+    assert (
+        router(
+            {
+                "open_codes": "- Code: x",
+                "open_codes_validation": "PASS",
+            }
+        )
+        == END
+    )
+
+
+@patch("agents.core.state.USE_OPEN_CODES_VALIDATOR", True)
 def test_agent_node_retries_open_coding_on_fail():
     out = agent_node(
         {
