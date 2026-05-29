@@ -97,6 +97,18 @@ Issues:
 If PASS, you may add a single line of explanation after PASS. If FAIL, list specific issues so the coder can revise."""
 
 
+def llm_clustering_prompt(research_question: str) -> str:
+    """System-side instructions for HICode-style LLM clustering of open codes."""
+    goal = research_question.strip() or "thematic patterns in the coded material"
+    return f"""Synthesize the entire list of labels by clustering similar labels that are inductively labeled.
+The clustering is to finalize MEANINGFUL and INSIGHTFUL THEMES for: {goal}
+
+Output in JSON format where each key is a cluster theme name and each value is a list of input labels in that cluster.
+For each cluster, the value must only contain labels copied exactly from the user input (same spelling and casing).
+Do not invent labels that were not in the user input.
+ONLY output the JSON object, with no other text."""
+
+
 def high_level_code_generation_prompt(bulleted: str, research_question: str) -> str:
     """Return the prompt that asks for JSON with label, confidence, rationale for one cluster."""
     rq_line = ""
