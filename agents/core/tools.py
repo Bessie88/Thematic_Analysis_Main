@@ -15,6 +15,7 @@ from langchain_openai import ChatOpenAI
 from sentence_transformers import SentenceTransformer
 
 from .hierarchy_refine import maybe_refine_hierarchy
+from .llm_clustering import axial_llm_cluster, use_llm_clustering
 from .paths import (
     CLUSTERED_CODES_PATH,
     CODEBOOK_PATH,
@@ -64,6 +65,18 @@ llm = ChatOpenAI(
     model_kwargs={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
 )
 
+# HICode-style axial clustering (temperature=0, up to 8192 completion tokens).
+# Each batch call passes a dynamic max_tokens so input + completion fit the SGLang
+# context window (see _llm_cluster_completion_budget in llm_clustering.py).
+cluster_llm = ChatOpenAI(
+    model="llm",
+    openai_api_key="EMPTY",
+    openai_api_base="http://localhost:8000/v1",
+    temperature=0,
+    max_tokens=8192,
+    model_kwargs={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
+)
+
 
 @tool
 def open_coding(text: str, research_question: str, validator_feedback: Optional[str] = None) -> str:
@@ -83,14 +96,17 @@ def validate_open_codes(text: str, generated_codes: str, research_question: str)
 
 
 @tool
-def axial_coding(open_codes: str) -> str:
-    """Axial step: JSON array of code strings → embed, K-means, write clusters; returns a text summary."""
+def axial_coding(open_codes: str, research_question: str = "") -> str:
+    """Axial step: JSON array of code strings → cluster; write gt_clustered_codes.json."""
     try:
         all_codes = json.loads(open_codes)
     except json.JSONDecodeError:
         return "axial_coding expects a JSON array of code strings."
     if not isinstance(all_codes, list) or not all(isinstance(x, str) for x in all_codes):
         return "axial_coding expects a JSON array of code strings."
+    out_dir = str(CLUSTERED_CODES_PATH.parent)
+    if use_llm_clustering():
+        return axial_llm_cluster(all_codes, research_question, cluster_llm, out_dir=out_dir)
     model_name = os.environ.get("GT_EMBED_MODEL") or (
         str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B")
         if os.path.isdir(str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B"))
@@ -99,7 +115,7 @@ def axial_coding(open_codes: str) -> str:
     if os.path.isdir(model_name):
         model_name = os.path.abspath(model_name)
         os.environ["HF_HUB_OFFLINE"] = "1"
-    return axial_embed_and_cluster(all_codes, model_name=model_name)
+    return axial_embed_and_cluster(all_codes, model_name=model_name, out_dir=out_dir)
 
 
 @tool
@@ -120,6 +136,30 @@ def high_level_code_generation(
     out_dir = os.path.dirname(cluster_file) or "."
     out_path = os.path.join(out_dir, "codebook.json")
     confidence_path = os.path.join(out_dir, "codebook_confidence.json")
+
+    theme_names = data.get("cluster_theme_names")
+    if isinstance(theme_names, dict) and theme_names:
+        codebook = {}
+        codebook_confidence: Dict[str, Dict[str, Any]] = {}
+        for cid in sorted(cluster_to_codes.keys(), key=lambda x: int(x) if str(x).isdigit() else x):
+            label = str(theme_names.get(cid, theme_names.get(str(cid), ""))).strip()
+            if not label:
+                label = f"Cluster {cid}"
+            codebook[str(cid)] = label
+            codebook_confidence[str(cid)] = {
+                "label": label,
+                "confidence": 4,
+                "rationale": "from LLM axial clustering",
+            }
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump({"codebook": codebook, "cluster_to_codes": cluster_to_codes}, f, indent=2)
+        with open(confidence_path, "w", encoding="utf-8") as f:
+            json.dump(codebook_confidence, f, indent=2)
+        log_step(
+            "HIGH_LEVEL_SKIPPED",
+            f"Using cluster_theme_names from LLM clustering ({len(codebook)} clusters).",
+        )
+        return json.dumps(codebook)
     codebook = {}
     codebook_confidence: Dict[str, Dict[str, Any]] = {}
     if os.path.isfile(out_path):
