@@ -7,6 +7,7 @@ import os
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Dict, List, Set
 
+from .llm_clustering import USE_LLM_CLUSTERING, axial_llm_cluster, use_llm_clustering
 from .paths import DATA_DIR, HIERARCHY_PATH, WEIGHTS_DIR, ensure_output_dirs
 from .utils import log_step
 
@@ -17,7 +18,6 @@ REFINE_TOP_K_OTHER_CLUSTERS = 5
 
 EMBED_DRAIN_THRESHOLD = 20
 
-from .llm_clustering import USE_LLM_CLUSTERING, axial_llm_cluster, use_llm_clustering
 
 __all__ = [
     "USE_LLM_CLUSTERING",

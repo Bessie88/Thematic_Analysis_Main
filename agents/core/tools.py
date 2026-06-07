@@ -15,6 +15,7 @@ from langchain_openai import ChatOpenAI
 from sentence_transformers import SentenceTransformer
 
 from .hierarchy_refine import maybe_refine_hierarchy
+from .llm_clustering import axial_llm_cluster, use_llm_clustering
 from .paths import (
     CLUSTERED_CODES_PATH,
     CODEBOOK_PATH,
@@ -25,7 +26,6 @@ from .paths import (
     display_path,
     ensure_output_dirs,
 )
-from .llm_clustering import axial_llm_cluster, use_llm_clustering
 from .pipeline_helpers import (
     EMBED_DRAIN_THRESHOLD,
     REFINE_TOP_K_OTHER_CLUSTERS,

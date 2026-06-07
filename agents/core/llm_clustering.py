@@ -229,9 +229,7 @@ def axial_llm_cluster(
             model_output = _hicode_run_batch(llm, system_prompt, batch, iteration, b)
             for k, members in model_output.items():
                 if isinstance(members, list):
-                    cluster.setdefault(str(k), []).extend(
-                        m for m in members if isinstance(m, str)
-                    )
+                    cluster.setdefault(str(k), []).extend(m for m in members if isinstance(m, str))
 
         cluster_list.append(cluster)
 
