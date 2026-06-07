@@ -138,7 +138,10 @@ def agent_node(state: GTState):
         return {
             "tool_call": {
                 "tool": "axial_coding",
-                "args": {"open_codes": json.dumps(state["all_codes_for_axial"])},
+                "args": {
+                    "open_codes": json.dumps(state["all_codes_for_axial"]),
+                    "research_question": rq,
+                },
             },
             "step": step,
         }

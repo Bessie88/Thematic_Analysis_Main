@@ -17,6 +17,14 @@ REFINE_TOP_K_OTHER_CLUSTERS = 5
 
 EMBED_DRAIN_THRESHOLD = 20
 
+from .llm_clustering import USE_LLM_CLUSTERING, axial_llm_cluster, use_llm_clustering
+
+__all__ = [
+    "USE_LLM_CLUSTERING",
+    "axial_llm_cluster",
+    "use_llm_clustering",
+]
+
 
 def refine_llm_max_codes() -> int:
     raw = os.environ.get("GT_REFINE_LLM_MAX_CODES", "44").strip()
@@ -237,6 +245,7 @@ def axial_embed_and_cluster(
     if n < K_MIN:
         cluster_to_codes_out = {"0": deduped_codes}
         out = {
+            "clustering_method": "embedding",
             "all_codes": deduped_codes,
             "labels": [0] * n,
             "k": 1,
@@ -300,6 +309,7 @@ def axial_embed_and_cluster(
             pass
 
     out = {
+        "clustering_method": "embedding",
         "all_codes": deduped_codes,
         "labels": labels.tolist(),
         "k": best_k,

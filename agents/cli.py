@@ -167,6 +167,12 @@ def main() -> None:
         "OPEN_CODING_VALIDATOR",
         "enabled" if USE_OPEN_CODES_VALIDATOR else "disabled",
     )
+    from agents.core.llm_clustering import use_llm_clustering
+
+    log_step(
+        "AXIAL_CLUSTERING",
+        "llm" if use_llm_clustering() else "embedding",
+    )
 
     if args.high_level_only:
         if not CLUSTERED_CODES_PATH.is_file():

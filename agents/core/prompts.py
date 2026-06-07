@@ -98,15 +98,17 @@ If PASS, you may add a single line of explanation after PASS. If FAIL, list spec
 
 
 def llm_clustering_prompt(research_question: str) -> str:
-    """System-side instructions for HICode-style LLM clustering of open codes."""
+    """System prompt for HICode-style LLM clustering of open codes.
+
+    Verbatim from HICode's make_clustering_prompt (label_clustering.py); only the
+    {goal} slot is filled with the research question.
+    """
     goal = research_question.strip() or "thematic patterns in the coded material"
     return f"""Synthesize the entire list of labels by clustering similar labels that are inductively labeled.
-The clustering is to finalize MEANINGFUL and INSIGHTFUL THEMES for: {goal}
-
-Output in JSON format where each key is a cluster theme name and each value is a list of input labels in that cluster.
-For each cluster, the value must only contain labels copied exactly from the user input (same spelling and casing).
-Do not invent labels that were not in the user input.
-ONLY output the JSON object, with no other text."""
+The clustering is to finalize MEANINGFUL and INSIGHTFUL THEMES for {goal}
+Output in json format where the key is the cluster, and the value is the list of input labels in that cluster.
+For each cluster, the value should only take labels from the user input.
+ONLY output the JSON object, and do not add any other text."""
 
 
 def high_level_code_generation_prompt(bulleted: str, research_question: str) -> str:
