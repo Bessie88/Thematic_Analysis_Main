@@ -56,7 +56,7 @@ def main() -> None:
     p.add_argument(
         "--open-coding-only",
         action="store_true",
-        help="Run only open coding; save gt_codes_only.json and exit (so SGLang can be killed before axial).",
+        help="Run only open coding; save gt_codes_only.json and exit (SGLang path stops server before axial).",
     )
     p.add_argument(
         "--axial-only",
@@ -99,7 +99,7 @@ def main() -> None:
     p.add_argument(
         "--report-only",
         action="store_true",
-        help="Generate research_report.md from gt_global_graph.json (Mistral/SGLang report server must be up).",
+        help="Generate research_report.md from gt_global_graph.json (LLM server must be up).",
     )
     p.add_argument(
         "--cooccurrence-only",
@@ -119,12 +119,12 @@ def main() -> None:
     p.add_argument(
         "--report-api-base",
         default=None,
-        help="OpenAI-compatible API base for report (default: env REPORT_OPENAI_BASE or http://localhost:8000/v1).",
+        help="OpenAI-compatible API base for report (default: REPORT_OPENAI_BASE, else GT_OPENAI_BASE, else http://localhost:8000/v1).",
     )
     p.add_argument(
         "--report-model",
         default=None,
-        help="Model name for report (default: env REPORT_MODEL_NAME or llm).",
+        help="Model name for report (default: REPORT_MODEL_NAME, else GT_LLM_MODEL, else llm).",
     )
     p.add_argument(
         "--skip-cross-cluster",

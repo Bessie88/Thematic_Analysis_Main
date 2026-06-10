@@ -11,7 +11,11 @@ agents/*.sif
 # Pipeline outputs and logs
 agents/outputs/
 agents/server.log
+agents/lm_server.log
+agents/lm_test_server.log
+agents/lm_login_test.log
 agents/gt_agent_trace.log
+agents/scripts/slurm-*.out
 
 # SLURM
 agents/slurm-*.out

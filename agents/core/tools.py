@@ -12,16 +12,16 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
-from sentence_transformers import SentenceTransformer
 
+from .embeddings import encode_texts
 from .hierarchy_refine import maybe_refine_hierarchy
+from .inference_config import llm_model_name, openai_base
 from .paths import (
     CLUSTERED_CODES_PATH,
     CODEBOOK_PATH,
     GLOBAL_GRAPH_PATH,
     HIERARCHY_PATH,
     META_THEMES_PATH,
-    WEIGHTS_DIR,
     display_path,
     ensure_output_dirs,
 )
@@ -32,7 +32,6 @@ from .pipeline_helpers import (
     axial_embed_and_cluster,
     build_sub_theme_node,
     drain_ungrouped_to_subthemes,
-    embed_model_name_for_hierarchy,
     hierarchy_assign_batch,
     hierarchy_embed_drain_enabled,
     meta_theme_bounds,
@@ -56,9 +55,9 @@ from .utils import clean_and_parse_json, log_step, remove_think_tags
 COMPLETION_TOKENS = 4096
 
 llm = ChatOpenAI(
-    model="llm",
+    model=llm_model_name(),
     openai_api_key="EMPTY",
-    openai_api_base="http://localhost:8000/v1",
+    openai_api_base=openai_base(),
     temperature=0,
     max_tokens=COMPLETION_TOKENS,
     model_kwargs={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
@@ -91,15 +90,7 @@ def axial_coding(open_codes: str) -> str:
         return "axial_coding expects a JSON array of code strings."
     if not isinstance(all_codes, list) or not all(isinstance(x, str) for x in all_codes):
         return "axial_coding expects a JSON array of code strings."
-    model_name = os.environ.get("GT_EMBED_MODEL") or (
-        str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B")
-        if os.path.isdir(str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B"))
-        else "Qwen/Qwen3-Embedding-0.6B"
-    )
-    if os.path.isdir(model_name):
-        model_name = os.path.abspath(model_name)
-        os.environ["HF_HUB_OFFLINE"] = "1"
-    return axial_embed_and_cluster(all_codes, model_name=model_name)
+    return axial_embed_and_cluster(all_codes)
 
 
 @tool
@@ -303,20 +294,10 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
     label_for_oid = {oid: codebook.get(oid, f"Cluster {oid}") for oid in sorted_oids}
     label_texts = [label_for_oid[oid] for oid in sorted_oids]
 
-    model_name = os.environ.get("GT_EMBED_MODEL") or (
-        str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B")
-        if os.path.isdir(str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B"))
-        else "Qwen/Qwen3-Embedding-0.6B"
-    )
-    if os.path.isdir(model_name):
-        model_name = os.path.abspath(model_name)
     try:
-        embed_model = SentenceTransformer(model_name, device="cpu")
+        emb = encode_texts(label_texts, normalize=True, show_progress=False)
     except Exception as e:
-        return f"Error loading embedding model for refine: {e}"
-
-    emb = embed_model.encode(label_texts, normalize_embeddings=True, show_progress_bar=False)
-    emb = np.asarray(emb, dtype=np.float32)
+        return f"Error embedding cluster labels for refine: {e}"
     oid_to_pos = {oid: i for i, oid in enumerate(sorted_oids)}
 
     for cid in sorted_oids:
@@ -698,9 +679,8 @@ def hierarchy_construction(research_question: str = "") -> str:
             and validated_sub_themes
         ):
             try:
-                drain_model = SentenceTransformer(embed_model_name_for_hierarchy(), device="cpu")
                 validated_ungrouped = drain_ungrouped_to_subthemes(
-                    validated_sub_themes, validated_ungrouped, drain_model
+                    validated_sub_themes, validated_ungrouped
                 )
             except Exception as e:
                 log_step("HIERARCHY_EMBED_DRAIN_ERROR", f"Cluster {cid}: {e}")
