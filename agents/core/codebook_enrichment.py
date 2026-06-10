@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List
 
@@ -21,8 +20,9 @@ _llm = ChatOpenAI(
 )
 
 REQUIRED_KEYS = {"label", "definition", "keywords", "inclusion", "exclusion"}
-BATCH_THRESHOLD = 25   # clusters above this size use hierarchical summarization
-BATCH_SIZE      = 20   # codes per batch in hierarchical mode
+BATCH_THRESHOLD = 25  # clusters above this size use hierarchical summarization
+BATCH_SIZE = 20  # codes per batch in hierarchical mode
+
 
 def _make_codebook_response_format(valid_ids: List[str]) -> dict:
     """Build a response format with enum-constrained code_ids for this cluster."""
@@ -34,7 +34,7 @@ def _make_codebook_response_format(valid_ids: List[str]) -> dict:
         "type": "object",
         "properties": {
             "criterion": {"type": "string"},
-            "code_ids":  {"type": "array", "items": items_schema},
+            "code_ids": {"type": "array", "items": items_schema},
         },
         "required": ["criterion", "code_ids"],
         "additionalProperties": False,
@@ -42,11 +42,11 @@ def _make_codebook_response_format(valid_ids: List[str]) -> dict:
     schema = {
         "type": "object",
         "properties": {
-            "label":      {"type": "string"},
+            "label": {"type": "string"},
             "definition": {"type": "string"},
-            "keywords":   {"type": "array", "items": {"type": "string"}},
-            "inclusion":  {"type": "array", "items": criterion_item},
-            "exclusion":  {"type": "array", "items": criterion_item},
+            "keywords": {"type": "array", "items": {"type": "string"}},
+            "inclusion": {"type": "array", "items": criterion_item},
+            "exclusion": {"type": "array", "items": criterion_item},
         },
         "required": ["label", "definition", "keywords", "inclusion", "exclusion"],
         "additionalProperties": False,
@@ -58,10 +58,13 @@ def _make_codebook_response_format(valid_ids: List[str]) -> dict:
 CODEBOOK_RESPONSE_FORMAT = _make_codebook_response_format([])
 
 
-def _build_codes_text(codes: List[str], code_evidence: Dict[str, List[str]],
-                      code_notes: Dict[str, List[str]] = {},
-                      code_to_id: Dict[str, str] = {},
-                      max_quotes: int = 2) -> str:
+def _build_codes_text(
+    codes: List[str],
+    code_evidence: Dict[str, List[str]],
+    code_notes: Dict[str, List[str]] = {},
+    code_to_id: Dict[str, str] = {},
+    max_quotes: int = 2,
+) -> str:
     """Build codes text with local IDs (LC001, LC002...) to avoid cross-cluster confusion."""
     lines = []
     for local_idx, c in enumerate(codes):
@@ -70,7 +73,7 @@ def _build_codes_text(codes: List[str], code_evidence: Dict[str, List[str]],
         for ev in code_evidence.get(c, [])[:max_quotes]:
             lines.append(f'  [QUOTE] "{ev}"')
         for nt in code_notes.get(c, [])[:1]:
-            lines.append(f'  [NOTE] {nt}')
+            lines.append(f"  [NOTE] {nt}")
     return "\n".join(lines)
 
 
@@ -94,7 +97,7 @@ def _enrich_batch(
         for ev in code_evidence.get(c, [])[:2]:
             lines.append(f'  [QUOTE] "{ev}"')
         for nt in code_notes.get(c, [])[:1]:
-            lines.append(f'  [NOTE] {nt}')
+            lines.append(f"  [NOTE] {nt}")
     codes_text = "\n".join(lines)
 
     items_schema = {"type": "string", "enum": batch_ids} if batch_ids else {"type": "string"}
@@ -102,7 +105,7 @@ def _enrich_batch(
         "type": "object",
         "properties": {
             "criterion": {"type": "string"},
-            "code_ids":  {"type": "array", "items": items_schema},
+            "code_ids": {"type": "array", "items": items_schema},
         },
         "required": ["criterion", "code_ids"],
         "additionalProperties": False,
@@ -135,7 +138,9 @@ def _enrich_batch(
         f"Focus on patterns within this batch only."
     )
 
-    raw = llm_invoke_with_skill(_llm, "codebook_batch_enrich", prompt, response_format=response_format)
+    raw = llm_invoke_with_skill(
+        _llm, "codebook_batch_enrich", prompt, response_format=response_format
+    )
     try:
         result = clean_and_parse_json(raw)
         if isinstance(result, dict):
@@ -158,16 +163,19 @@ def _quote_in_evidence(quote: str, known: List[str]) -> bool:
     q_words = set(q.split())
     if len(q_words) < 6:
         return False
-    return max(
-        len(q_words & set(" ".join(ev.split()).lower().split())) / len(q_words)
-        for ev in known
-    ) >= 0.80
+    return (
+        max(len(q_words & set(" ".join(ev.split()).lower().split())) / len(q_words) for ev in known)
+        >= 0.80
+    )
 
 
-def _validate_entries(parsed: Dict[str, Any], valid_ids: set,
-                      id_to_code: Dict[str, str],
-                      code_evidence: Dict[str, List[str]],
-                      label: str) -> None:
+def _validate_entries(
+    parsed: Dict[str, Any],
+    valid_ids: set,
+    id_to_code: Dict[str, str],
+    code_evidence: Dict[str, List[str]],
+    label: str,
+) -> None:
     """Validate code_ids (list) and example quotes (list) against known evidence."""
     for section in ("inclusion", "exclusion"):
         for item in parsed.get(section, []):
@@ -189,20 +197,28 @@ def _validate_entries(parsed: Dict[str, Any], valid_ids: set,
                     valid_pairs.append((cid, ex))
                 else:
                     reason = "no evidence loaded" if not known else "not in evidence"
-                    log_step("ENRICH_QUOTE_WARN",
-                             f"Cluster '{label}': example for {cid} {reason} — dropped")
+                    log_step(
+                        "ENRICH_QUOTE_WARN",
+                        f"Cluster '{label}': example for {cid} {reason} — dropped",
+                    )
             # Any extra code_ids beyond paired examples are dropped (no matching example)
             if len(good_ids) > len(examples):
-                log_step("ENRICH_ALIGN_WARN",
-                         f"Cluster '{label}': {len(good_ids) - len(examples)} code_ids without examples — dropped")
+                log_step(
+                    "ENRICH_ALIGN_WARN",
+                    f"Cluster '{label}': {len(good_ids) - len(examples)} code_ids without examples — dropped",
+                )
             item["code_ids"] = [cid for cid, _ in valid_pairs]
-            item["examples"] = [ex  for _, ex  in valid_pairs]
+            item["examples"] = [ex for _, ex in valid_pairs]
 
 
-def _enrich_one(cluster_id: str, label: str, codes: List[str],
-                code_evidence: Dict[str, List[str]] = {},
-                code_notes: Dict[str, List[str]] = {},
-                code_to_id: Dict[str, str] = {}) -> Dict[str, Any]:
+def _enrich_one(
+    cluster_id: str,
+    label: str,
+    codes: List[str],
+    code_evidence: Dict[str, List[str]] = {},
+    code_notes: Dict[str, List[str]] = {},
+    code_to_id: Dict[str, str] = {},
+) -> Dict[str, Any]:
     """Call LLM to enrich a single cluster; uses hierarchical summarization for large clusters."""
     try:
         local_id_to_code = {f"LC{i + 1:03d}": c for i, c in enumerate(codes)}
@@ -215,45 +231,58 @@ def _enrich_one(cluster_id: str, label: str, codes: List[str],
             # ── Small cluster: single-shot ─────────────────────────────────────
             codes_with_evidence = [c for c in codes if code_evidence.get(c)]
             codes_without_evidence = [c for c in codes if not code_evidence.get(c)]
-            log_step("ENRICH_COVERAGE",
-                     f"Cluster {cluster_id} ({label}): {len(codes)} codes total — "
-                     f"all seen directly. "
-                     f"Evidence available: {len(codes_with_evidence)}/{len(codes)} codes. "
-                     + (f"No evidence for: {codes_without_evidence}" if codes_without_evidence else ""))
+            log_step(
+                "ENRICH_COVERAGE",
+                f"Cluster {cluster_id} ({label}): {len(codes)} codes total — "
+                f"all seen directly. "
+                f"Evidence available: {len(codes_with_evidence)}/{len(codes)} codes. "
+                + (f"No evidence for: {codes_without_evidence}" if codes_without_evidence else ""),
+            )
             prompt = (
                 f"Theme: {label}\n"
                 f"VALID Code IDs — use ONLY these, do not invent others: {valid_ids_str}\n"
                 f"Codes and participant quotes:\n"
                 f"{_build_codes_text(codes, code_evidence, code_notes, code_to_id)}"
             )
-            raw = llm_invoke_with_skill(_llm, "codebook_enrichment", prompt,
-                                        response_format=response_format)
+            raw = llm_invoke_with_skill(
+                _llm, "codebook_enrichment", prompt, response_format=response_format
+            )
         else:
             # ── Large cluster: per-batch codebook enrich → synthesize ──────────
-            batches = [codes[i:i + BATCH_SIZE] for i in range(0, len(codes), BATCH_SIZE)]
-            code_to_local_id = {c: f"LC{i+1:03d}" for i, c in enumerate(codes)}
+            batches = [codes[i : i + BATCH_SIZE] for i in range(0, len(codes), BATCH_SIZE)]
+            code_to_local_id = {c: f"LC{i + 1:03d}" for i, c in enumerate(codes)}
 
             codes_with_evidence = [c for c in codes if code_evidence.get(c)]
             codes_without_evidence = [c for c in codes if not code_evidence.get(c)]
 
             # Each batch generates a structured partial codebook entry (with full evidence)
             with ThreadPoolExecutor(max_workers=min(len(batches), 4)) as bex:
-                partial_entries = list(bex.map(
-                    lambda b: _enrich_batch(label, b, code_to_local_id, code_evidence, code_notes),
-                    batches,
-                ))
+                partial_entries = list(
+                    bex.map(
+                        lambda b: _enrich_batch(
+                            label, b, code_to_local_id, code_evidence, code_notes
+                        ),
+                        batches,
+                    )
+                )
 
-            log_step("ENRICH_COVERAGE",
-                     f"Cluster {cluster_id} ({label}): {len(codes)} codes total — batch path. "
-                     f"Evidence available: {len(codes_with_evidence)}/{len(codes)} codes. "
-                     f"All {len(codes)} codes seen with full evidence across {len(batches)} batches "
-                     f"(up to 2 quotes/code per batch). "
-                     + (f"No evidence at all for: {codes_without_evidence}" if codes_without_evidence else ""))
+            log_step(
+                "ENRICH_COVERAGE",
+                f"Cluster {cluster_id} ({label}): {len(codes)} codes total — batch path. "
+                f"Evidence available: {len(codes_with_evidence)}/{len(codes)} codes. "
+                f"All {len(codes)} codes seen with full evidence across {len(batches)} batches "
+                f"(up to 2 quotes/code per batch). "
+                + (
+                    f"No evidence at all for: {codes_without_evidence}"
+                    if codes_without_evidence
+                    else ""
+                ),
+            )
 
             # Format partial entries for synthesis
             partial_block = ""
             for i, entry in enumerate(partial_entries):
-                partial_block += f"\n[Batch {i+1}/{len(batches)}]\n"
+                partial_block += f"\n[Batch {i + 1}/{len(batches)}]\n"
                 partial_block += f"Definition notes: {entry.get('definition_notes', '')}\n"
                 if entry.get("inclusion"):
                     partial_block += "Inclusion criteria:\n"
@@ -266,9 +295,7 @@ def _enrich_one(cluster_id: str, label: str, codes: List[str],
                         ids = ", ".join(c.get("code_ids", []))
                         partial_block += f"  - {c['criterion']} (codes: {ids})\n"
 
-            all_labels = "\n".join(
-                f"- [{f'LC{i+1:03d}'}] {c}" for i, c in enumerate(codes)
-            )
+            all_labels = "\n".join(f"- [{f'LC{i + 1:03d}'}] {c}" for i, c in enumerate(codes))
 
             prompt = (
                 f"Theme: {label}\n"
@@ -292,8 +319,9 @@ def _enrich_one(cluster_id: str, label: str, codes: List[str],
                 f"6. Never invent code IDs. If a criterion cannot be grounded in any valid code ID, "
                 f"drop it."
             )
-            raw = llm_invoke_with_skill(_llm, "codebook_enrichment", prompt,
-                                        response_format=response_format)
+            raw = llm_invoke_with_skill(
+                _llm, "codebook_enrichment", prompt, response_format=response_format
+            )
 
         def _parse_and_validate(raw_text: str) -> tuple:
             p = clean_and_parse_json(raw_text)
@@ -316,20 +344,21 @@ def _enrich_one(cluster_id: str, label: str, codes: List[str],
 
         # ── Retry once if invalid IDs were used ──────────────────────────────
         if bad_ids:
-            log_step("ENRICH_RETRY",
-                     f"Cluster '{label}': invalid IDs {bad_ids} — retrying")
+            log_step("ENRICH_RETRY", f"Cluster '{label}': invalid IDs {bad_ids} — retrying")
             retry_suffix = (
                 f"\n\nCORRECTION: your previous response used non-existent IDs: "
                 f"{', '.join(sorted(bad_ids))}. "
                 f"Select ONLY from: {valid_ids_str}."
             )
-            raw2 = llm_invoke_with_skill(_llm, "codebook_enrichment",
-                                         prompt + retry_suffix,
-                                         response_format=response_format)
+            raw2 = llm_invoke_with_skill(
+                _llm, "codebook_enrichment", prompt + retry_suffix, response_format=response_format
+            )
             parsed, bad_ids2 = _parse_and_validate(raw2)
             if bad_ids2:
-                log_step("ENRICH_WARN",
-                         f"Cluster '{label}': still invalid IDs after retry {bad_ids2} — dropped")
+                log_step(
+                    "ENRICH_WARN",
+                    f"Cluster '{label}': still invalid IDs after retry {bad_ids2} — dropped",
+                )
 
         # ── Fill examples programmatically from real evidence ─────────────────
         for section in ("inclusion", "exclusion"):
@@ -369,8 +398,15 @@ def enrich_codebook(
     enriched: Dict[str, Dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {
-            ex.submit(_enrich_one, cid, cluster_names[cid],
-                      cluster_to_codes.get(cid, []), code_evidence, code_notes, code_to_id): cid
+            ex.submit(
+                _enrich_one,
+                cid,
+                cluster_names[cid],
+                cluster_to_codes.get(cid, []),
+                code_evidence,
+                code_notes,
+                code_to_id,
+            ): cid
             for cid in cluster_names
         }
         for fut in as_completed(futures):

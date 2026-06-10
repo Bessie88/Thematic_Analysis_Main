@@ -9,25 +9,26 @@ Writes: gt_meta_themes_enriched.json
 
 Requires sglang to be running (same server used by the main pipeline).
 """
+
 import json
 import os
-import re
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-# Allow running as `python -m agents.scripts.enrich_dimensions` from repo root
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(REPO_ROOT))
-
 from langchain_openai import ChatOpenAI
 
-from agents.core.paths import (CODEBOOK_PATH, META_THEMES_PATH, DATA_DIR,
-                                OPEN_CODES_MARKDOWN_PATH, ensure_output_dirs)
-from agents.core.skills import llm_invoke_with_skill
-from agents.core.utils import clean_and_parse_json, log_step, parse_code_evidence
+from .paths import (
+    CODEBOOK_PATH,
+    DATA_DIR,
+    META_THEMES_PATH,
+    OPEN_CODES_MARKDOWN_PATH,
+    ensure_output_dirs,
+)
+from .skills import llm_invoke_with_skill
+from .utils import clean_and_parse_json, log_step, parse_code_evidence
 
 ENRICHED_PATH = DATA_DIR / "gt_meta_themes_enriched.json"
 REQUIRED_KEYS = {"label", "definition", "keywords", "inclusion", "exclusion"}
@@ -38,7 +39,7 @@ _DIM_CRITERION_NO_EXAMPLE = {
     "type": "object",
     "properties": {
         "criterion": {"type": "string"},
-        "code_ids":  {"type": "array", "items": {"type": "string"}},
+        "code_ids": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["criterion", "code_ids"],
     "additionalProperties": False,
@@ -47,30 +48,30 @@ _DIM_CRITERION_NO_EXAMPLE = {
 _DIM_ENTRY_NO_EXAMPLE_SCHEMA = {
     "type": "object",
     "properties": {
-        "label":      {"type": "string"},
+        "label": {"type": "string"},
         "definition": {"type": "string"},
-        "keywords":   {"type": "array", "items": {"type": "string"}},
-        "inclusion":  {"type": "array", "items": _DIM_CRITERION_NO_EXAMPLE},
-        "exclusion":  {"type": "array", "items": _DIM_CRITERION_NO_EXAMPLE},
+        "keywords": {"type": "array", "items": {"type": "string"}},
+        "inclusion": {"type": "array", "items": _DIM_CRITERION_NO_EXAMPLE},
+        "exclusion": {"type": "array", "items": _DIM_CRITERION_NO_EXAMPLE},
     },
     "required": ["label", "definition", "keywords", "inclusion", "exclusion"],
     "additionalProperties": False,
 }
+
 
 def _make_induction_format(valid_ids: List[str], all_cluster_ids: List[str] = None) -> dict:
     """Build a response format with enum-constrained code_ids.
     inclusion uses only this meta-theme's cluster IDs;
     exclusion allows any cluster ID (to reference adjacent themes as boundaries).
     """
+
     def _criterion_item(ids: List[str]) -> dict:
-        items_schema = (
-            {"type": "string", "enum": sorted(ids)} if ids else {"type": "string"}
-        )
+        items_schema = {"type": "string", "enum": sorted(ids)} if ids else {"type": "string"}
         return {
             "type": "object",
             "properties": {
                 "criterion": {"type": "string"},
-                "code_ids":  {"type": "array", "items": items_schema},
+                "code_ids": {"type": "array", "items": items_schema},
             },
             "required": ["criterion", "code_ids"],
             "additionalProperties": False,
@@ -80,24 +81,28 @@ def _make_induction_format(valid_ids: List[str], all_cluster_ids: List[str] = No
     schema = {
         "type": "object",
         "properties": {
-            "label":      {"type": "string"},
+            "label": {"type": "string"},
             "definition": {"type": "string"},
-            "keywords":   {"type": "array", "items": {"type": "string"}},
-            "inclusion":  {"type": "array", "items": _criterion_item(valid_ids)},
-            "exclusion":  {"type": "array", "items": _criterion_item(excl_ids)},
+            "keywords": {"type": "array", "items": {"type": "string"}},
+            "inclusion": {"type": "array", "items": _criterion_item(valid_ids)},
+            "exclusion": {"type": "array", "items": _criterion_item(excl_ids)},
         },
         "required": ["label", "definition", "keywords", "inclusion", "exclusion"],
         "additionalProperties": False,
     }
-    return {"type": "json_schema", "json_schema": {"name": "dimension_entry_no_example", "schema": schema}}
+    return {
+        "type": "json_schema",
+        "json_schema": {"name": "dimension_entry_no_example", "schema": schema},
+    }
+
 
 # Pass 2 schema: full entry with examples
 _DIM_CRITERION_ITEM = {
     "type": "object",
     "properties": {
         "criterion": {"type": "string"},
-        "code_ids":  {"type": "array", "items": {"type": "string"}},
-        "examples":  {"type": "array", "items": {"type": "string"}},
+        "code_ids": {"type": "array", "items": {"type": "string"}},
+        "examples": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["criterion", "code_ids", "examples"],
     "additionalProperties": False,
@@ -106,11 +111,11 @@ _DIM_CRITERION_ITEM = {
 _DIM_ENTRY_SCHEMA = {
     "type": "object",
     "properties": {
-        "label":      {"type": "string"},
+        "label": {"type": "string"},
         "definition": {"type": "string"},
-        "keywords":   {"type": "array", "items": {"type": "string"}},
-        "inclusion":  {"type": "array", "items": _DIM_CRITERION_ITEM},
-        "exclusion":  {"type": "array", "items": _DIM_CRITERION_ITEM},
+        "keywords": {"type": "array", "items": {"type": "string"}},
+        "inclusion": {"type": "array", "items": _DIM_CRITERION_ITEM},
+        "exclusion": {"type": "array", "items": _DIM_CRITERION_ITEM},
     },
     "required": ["label", "definition", "keywords", "inclusion", "exclusion"],
     "additionalProperties": False,
@@ -131,12 +136,12 @@ _llm = ChatOpenAI(
 )
 
 
-
-
-def _quotes_block(cluster_ids: List[str],
-                   cluster_to_codes: Dict[str, List[str]],
-                   code_evidence: Dict[str, List[str]],
-                   cluster_labels: List[str] = None) -> str:
+def _quotes_block(
+    cluster_ids: List[str],
+    cluster_to_codes: Dict[str, List[str]],
+    code_evidence: Dict[str, List[str]],
+    cluster_labels: List[str] = None,
+) -> str:
     """Build prompt block with cluster IDs, optional labels, and real participant quotes."""
     lines = []
     for i, cid in enumerate(cluster_ids):
@@ -156,9 +161,12 @@ def _quotes_block(cluster_ids: List[str],
     return "\n".join(lines)
 
 
-def _quote_in_cluster_evidence(quote: str, cluster_id: str,
-                                cluster_to_codes: Dict[str, List[str]],
-                                code_evidence: Dict[str, List[str]]) -> bool:
+def _quote_in_cluster_evidence(
+    quote: str,
+    cluster_id: str,
+    cluster_to_codes: Dict[str, List[str]],
+    code_evidence: Dict[str, List[str]],
+) -> bool:
     """Return True if quote is sufficiently similar to any evidence in the cluster."""
     q = " ".join(quote.split()).lower()
     if not q:
@@ -175,10 +183,10 @@ def _quote_in_cluster_evidence(quote: str, cluster_id: str,
     q_words = set(q.split())
     if len(q_words) < 6:
         return False
-    return max(
-        len(q_words & set(" ".join(ev.split()).lower().split())) / len(q_words)
-        for ev in known
-    ) >= 0.80
+    return (
+        max(len(q_words & set(" ".join(ev.split()).lower().split())) / len(q_words) for ev in known)
+        >= 0.80
+    )
 
 
 def _raw_cid(cid: str) -> str:
@@ -186,10 +194,13 @@ def _raw_cid(cid: str) -> str:
     return str(int(cid[2:])) if cid.startswith("CL") and cid[2:].isdigit() else cid
 
 
-def _validate_and_align(parsed: Dict[str, Any], valid_ids: set,
-                         cluster_to_codes: Dict[str, List[str]],
-                         code_evidence: Dict[str, List[str]],
-                         name: str) -> None:
+def _validate_and_align(
+    parsed: Dict[str, Any],
+    valid_ids: set,
+    cluster_to_codes: Dict[str, List[str]],
+    code_evidence: Dict[str, List[str]],
+    name: str,
+) -> None:
     """Drop invalid cluster IDs, ungrounded examples, and ungrounded supporting_quotes."""
     for section in ("inclusion", "exclusion"):
         for item in parsed.get(section, []):
@@ -212,19 +223,24 @@ def _validate_and_align(parsed: Dict[str, Any], valid_ids: set,
                 if _quote_in_cluster_evidence(ex, _raw_cid(cid), cluster_to_codes, code_evidence):
                     valid_pairs.append((cid, ex))
                 else:
-                    log_step("DIM_ENRICH_QUOTE_WARN",
-                             f"'{name}': example for {cid} not in cluster evidence — dropped")
+                    log_step(
+                        "DIM_ENRICH_QUOTE_WARN",
+                        f"'{name}': example for {cid} not in cluster evidence — dropped",
+                    )
             if len(good_ids) > len(examples):
-                log_step("DIM_ENRICH_ALIGN",
-                         f"'{name}': {len(good_ids) - len(examples)} code_ids without examples — dropped")
+                log_step(
+                    "DIM_ENRICH_ALIGN",
+                    f"'{name}': {len(good_ids) - len(examples)} code_ids without examples — dropped",
+                )
             item["code_ids"] = [cid for cid, _ in valid_pairs]
-            item["examples"] = [ex  for _, ex  in valid_pairs]
+            item["examples"] = [ex for _, ex in valid_pairs]
 
 
-
-def _fill_examples(entry: Dict[str, Any],
-                   cluster_to_codes: Dict[str, List[str]],
-                   code_evidence: Dict[str, List[str]]) -> None:
+def _fill_examples(
+    entry: Dict[str, Any],
+    cluster_to_codes: Dict[str, List[str]],
+    code_evidence: Dict[str, List[str]],
+) -> None:
     """Programmatically fill examples from real evidence — no LLM involved.
     Takes evs[0] per cited cluster (open coding LLM already chose the best one),
     deduplicates across the entire entry (no quote reused across criteria), caps at 3.
@@ -246,20 +262,28 @@ def _fill_examples(entry: Dict[str, Any],
             item["examples"] = examples
 
 
-def _enrich_one(name: str, cluster_ids: List[str], cluster_labels: List[str],
-                cluster_to_codes: Dict[str, List[str]],
-                code_evidence: Dict[str, List[str]]) -> Dict[str, Any]:
+def _enrich_one(
+    name: str,
+    cluster_ids: List[str],
+    cluster_labels: List[str],
+    cluster_to_codes: Dict[str, List[str]],
+    code_evidence: Dict[str, List[str]],
+) -> Dict[str, Any]:
     available_ids = ", ".join(f"CL{cid.zfill(2)}" for cid in cluster_ids)
     valid_ids = set(available_ids.replace(" ", "").split(","))
     # All cluster IDs across the full codebook — exclusion may reference any of them
-    all_cluster_ids = [f"CL{cid.zfill(2)}" for cid in sorted(cluster_to_codes.keys(), key=lambda x: int(x) if x.isdigit() else x)]
+    all_cluster_ids = [
+        f"CL{cid.zfill(2)}"
+        for cid in sorted(cluster_to_codes.keys(), key=lambda x: int(x) if x.isdigit() else x)
+    ]
     all_valid_ids = set(all_cluster_ids)
 
     induction_format = _make_induction_format(list(valid_ids), all_cluster_ids)
 
     def _run_pass1(prompt: str) -> Dict[str, Any]:
-        raw = llm_invoke_with_skill(_llm, "dimension_criteria_induction", prompt,
-                                    response_format=induction_format)
+        raw = llm_invoke_with_skill(
+            _llm, "dimension_criteria_induction", prompt, response_format=induction_format
+        )
         parsed = clean_and_parse_json(raw)
         if not isinstance(parsed, dict) or not REQUIRED_KEYS.issubset(parsed):
             raise ValueError(f"Pass 1 missing keys: {REQUIRED_KEYS - set(parsed)}")
@@ -308,8 +332,10 @@ def _enrich_one(name: str, cluster_ids: List[str], cluster_labels: List[str],
 
             # ── Retry once if any invalid IDs were used ───────────────────────────
             if bad_ids:
-                log_step("DIM_ENRICH_RETRY",
-                         f"'{name}': invalid IDs {bad_ids} — retrying with explicit feedback")
+                log_step(
+                    "DIM_ENRICH_RETRY",
+                    f"'{name}': invalid IDs {bad_ids} — retrying with explicit feedback",
+                )
                 retry_prompt = (
                     f"{base_prompt}\n\n"
                     f"CORRECTION: your previous response used these non-existent IDs: "
@@ -321,12 +347,17 @@ def _enrich_one(name: str, cluster_ids: List[str], cluster_labels: List[str],
                 bad_ids2 = _filter_and_collect_bad(parsed)
                 dropped2 = _drop_empty_criteria(parsed)
                 if bad_ids2:
-                    log_step("DIM_ENRICH_WARN",
-                             f"'{name}': still invalid IDs after retry {bad_ids2} — dropped")
+                    log_step(
+                        "DIM_ENRICH_WARN",
+                        f"'{name}': still invalid IDs after retry {bad_ids2} — dropped",
+                    )
                 dropped += dropped2
 
             if dropped:
-                log_step("DIM_ENRICH_DROPPED", f"'{name}': {dropped} criteria dropped (no valid code_ids)")
+                log_step(
+                    "DIM_ENRICH_DROPPED",
+                    f"'{name}': {dropped} criteria dropped (no valid code_ids)",
+                )
 
             _fill_examples(parsed, cluster_to_codes, code_evidence)
             return parsed
@@ -335,14 +366,21 @@ def _enrich_one(name: str, cluster_ids: List[str], cluster_labels: List[str],
             is_connection_err = "connection" in str(exc).lower() or "timeout" in str(exc).lower()
             if is_connection_err and attempt < max_attempts - 1:
                 wait = 10 * (attempt + 1)
-                log_step("DIM_ENRICH_RETRY",
-                         f"'{name}': connection error on attempt {attempt+1}/{max_attempts} "
-                         f"— retrying in {wait}s: {exc}")
+                log_step(
+                    "DIM_ENRICH_RETRY",
+                    f"'{name}': connection error on attempt {attempt + 1}/{max_attempts} "
+                    f"— retrying in {wait}s: {exc}",
+                )
                 time.sleep(wait)
                 continue
             log_step("DIM_ENRICH_WARN", f"'{name}': {exc}")
-            return {"label": name, "definition": "", "keywords": [],
-                    "inclusion": [], "exclusion": []}
+            return {
+                "label": name,
+                "definition": "",
+                "keywords": [],
+                "inclusion": [],
+                "exclusion": [],
+            }
 
 
 def main() -> None:
@@ -358,7 +396,7 @@ def main() -> None:
     with open(CODEBOOK_PATH, encoding="utf-8") as f:
         cb_data = json.load(f)
 
-    codebook: Dict[str, str] = cb_data.get("codebook", {})          # cluster_id → label
+    codebook: Dict[str, str] = cb_data.get("codebook", {})  # cluster_id → label
     cluster_to_codes: Dict[str, List[str]] = cb_data.get("cluster_to_codes", {})
     meta_themes: List[Dict] = meta_themes_data.get("meta_themes", [])
 
@@ -366,7 +404,8 @@ def main() -> None:
         print("Error: no meta_themes found in gt_meta_themes.json.")
         sys.exit(1)
 
-    from agents.core.paths import DEFAULT_DATA_CSV
+    from .paths import DEFAULT_DATA_CSV
+
     csv_path = Path(os.environ.get("GT_DATA_CSV", str(DEFAULT_DATA_CSV)))
     code_evidence, _ = parse_code_evidence(OPEN_CODES_MARKDOWN_PATH, csv_path)
     print(f"Loaded evidence for {len(code_evidence)} codes from {OPEN_CODES_MARKDOWN_PATH.name}")
@@ -381,8 +420,9 @@ def main() -> None:
             name = mt.get("name", f"Dimension {idx}")
             cids = [str(cid) for cid in mt.get("cluster_ids", [])]
             cluster_labels = [codebook.get(cid, f"Cluster {cid}") for cid in cids]
-            futures[ex.submit(_enrich_one, name, cids, cluster_labels,
-                              cluster_to_codes, code_evidence)] = idx
+            futures[
+                ex.submit(_enrich_one, name, cids, cluster_labels, cluster_to_codes, code_evidence)
+            ] = idx
 
         for fut in as_completed(futures):
             idx = futures[fut]
@@ -392,7 +432,9 @@ def main() -> None:
             enriched_list[idx] = entry
             log_step("DIM_ENRICH_DONE", entry["label"])
 
-    failed = [e["label"] for e in enriched_list if not e.get("inclusion") and not e.get("definition")]
+    failed = [
+        e["label"] for e in enriched_list if not e.get("inclusion") and not e.get("definition")
+    ]
     if failed:
         print(f"ERROR: {len(failed)} meta-theme(s) failed enrichment (empty result): {failed}")
         print("Fix the LLM server connection and rerun this script.")

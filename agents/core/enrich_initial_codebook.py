@@ -12,12 +12,9 @@ import os
 import sys
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(REPO_ROOT))
-
-from agents.core.codebook_enrichment import enrich_codebook
-from agents.core.paths import CODEBOOK_PATH, OPEN_CODES_MARKDOWN_PATH, DEFAULT_DATA_CSV, ensure_output_dirs
-from agents.core.utils import log_step, parse_code_evidence
+from .codebook_enrichment import enrich_codebook
+from .paths import CODEBOOK_PATH, DEFAULT_DATA_CSV, OPEN_CODES_MARKDOWN_PATH, ensure_output_dirs
+from .utils import log_step, parse_code_evidence
 
 
 def main() -> None:
@@ -39,8 +36,10 @@ def main() -> None:
 
     csv_path = Path(os.environ.get("GT_DATA_CSV", str(DEFAULT_DATA_CSV)))
     code_evidence, code_notes = parse_code_evidence(OPEN_CODES_MARKDOWN_PATH, csv_path)
-    print(f"Enriching {len(cluster_names)} codebook entries "
-          f"(evidence for {len(code_evidence)} codes, notes for {len(code_notes)} codes loaded)...")
+    print(
+        f"Enriching {len(cluster_names)} codebook entries "
+        f"(evidence for {len(code_evidence)} codes, notes for {len(code_notes)} codes loaded)..."
+    )
 
     # Assign stable IDs to all unique codes across all clusters
     seen: set = set()
@@ -54,14 +53,23 @@ def main() -> None:
 
     id_map_path = CODEBOOK_PATH.parent / "gt_code_id_map.json"
     with open(id_map_path, "w", encoding="utf-8") as f:
-        json.dump({"code_to_id": code_to_id,
-                   "id_to_code": {v: k for k, v in code_to_id.items()}}, f, indent=2, ensure_ascii=False)
+        json.dump(
+            {"code_to_id": code_to_id, "id_to_code": {v: k for k, v in code_to_id.items()}},
+            f,
+            indent=2,
+            ensure_ascii=False,
+        )
     print(f"Assigned {len(code_to_id)} code IDs → {id_map_path}")
 
     workers = int(os.environ.get("GT_ENRICH_WORKERS", "4"))
-    enriched = enrich_codebook(cluster_names, cluster_to_codes, workers=workers,
-                               code_evidence=code_evidence, code_notes=code_notes,
-                               code_to_id=code_to_id)
+    enriched = enrich_codebook(
+        cluster_names,
+        cluster_to_codes,
+        workers=workers,
+        code_evidence=code_evidence,
+        code_notes=code_notes,
+        code_to_id=code_to_id,
+    )
 
     def _rich_label(cid: str) -> str:
         e = enriched.get(cid, {})
@@ -87,7 +95,9 @@ def main() -> None:
     with open(CODEBOOK_PATH, "w", encoding="utf-8") as f:
         json.dump(cb_data, f, indent=2, ensure_ascii=False)
 
-    log_step("INITIAL_ENRICH_COMPLETE", f"codebook.json updated with {len(enriched)} enriched entries")
+    log_step(
+        "INITIAL_ENRICH_COMPLETE", f"codebook.json updated with {len(enriched)} enriched entries"
+    )
     print("Done. codebook.json updated with codebook and codebook_enriched.")
 
 
