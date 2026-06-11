@@ -1,0 +1,5 @@
+[run]
+omit =
+    agents/core/codebook_enrichment.py
+    agents/core/enrich_dimensions.py
+    agents/core/enrich_initial_codebook.py
