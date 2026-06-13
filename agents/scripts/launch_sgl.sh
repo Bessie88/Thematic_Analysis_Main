@@ -242,9 +242,43 @@ if [ $HL_EXIT -ne 0 ]; then
     exit $HL_EXIT
 fi
 
-# --- 9. Refine cluster assignments ---
-echo "Starting refine cluster assignments (agents.cli --refine-only)..."
-python -m agents.cli --refine-only --research-question "$RESEARCH_QUESTION"
+# Release GPU while waiting for human codebook review (optional gate).
+stop_sglang_server "$SERVER_PID"
+SERVER_PID=""
+
+if [ "${GT_CODEBOOK_REVIEW:-0}" = "1" ]; then
+    echo "Codebook review gate enabled (GT_CODEBOOK_REVIEW=1)..."
+    export PIPELINE_SLUG="${PIPELINE_SLUG:-default}"
+    export RESEARCH_QUESTION
+    if [ "${GT_CODEBOOK_REVIEW_MODE:-manual}" != "interrupt" ]; then
+        PYTHONPATH="$REPO_ROOT" python "$AGENTS_ROOT/scripts/upload_codebook_for_review.py" || exit 1
+    fi
+    PYTHONPATH="$REPO_ROOT" python -m agents.cli --wait-codebook-review --research-question "$RESEARCH_QUESTION" || exit 1
+fi
+
+# --- 9. Refine cluster assignments (restart SGLang) ---
+sglang_cuda_preflight "$MODEL_PATH"
+echo "Restarting SGLang for refine cluster assignments..."
+python -m sglang.launch_server \
+  --model-path "$MODEL_PATH" \
+  --port $PORT \
+  --host 0.0.0.0 \
+  --served-model-name llm \
+  --mem-fraction-static 0.90 \
+  --context-length 8000 \
+  >"$SERVER_LOG" 2>&1 &
+SERVER_PID=$!
+if ! wait_for_openai_ready "$PORT" "$SERVER_LOG" "$SERVER_PID" "SGLang (Qwen, refine)"; then
+    exit 1
+fi
+
+if [ "${GT_CODEBOOK_REVIEW:-0}" = "1" ] && [ "${GT_CODEBOOK_REVIEW_MODE:-manual}" = "interrupt" ]; then
+    echo "Starting refine via LangGraph resume (GT_CODEBOOK_REVIEW_MODE=interrupt)..."
+    python -m agents.cli --resume-codebook-review --research-question "$RESEARCH_QUESTION"
+else
+    echo "Starting refine cluster assignments (agents.cli --refine-only)..."
+    python -m agents.cli --refine-only --research-question "$RESEARCH_QUESTION"
+fi
 REFINE_EXIT=$?
 echo "Refine step finished with exit code $REFINE_EXIT."
 if [ $REFINE_EXIT -ne 0 ]; then

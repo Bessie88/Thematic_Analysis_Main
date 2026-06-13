@@ -11,10 +11,19 @@ import pandas as pd
 
 from agents.core.app import app
 from agents.core.cooccurrence import write_cooccurrence
+from agents.core.codebook_review import (
+    human_review_enabled,
+    review_meta_from_env,
+    review_mode,
+    upload_v1_for_review,
+    wait_for_approval,
+    fetch_and_materialize_approved,
+)
 from agents.core.state import USE_OPEN_CODES_VALIDATOR
 from agents.core.paths import (
     CLUSTERED_CODES_PATH,
     CODEBOOK_PATH,
+    CODEBOOK_PROVENANCE_PATH,
     COOCCURRENCE_PATH,
     DEFAULT_DATA_CSV,
     GLOBAL_GRAPH_PATH,
@@ -46,9 +55,30 @@ def _base_state(research_question: str) -> dict:
         "hierarchy": None,
         "meta_themes": None,
         "global_graph": None,
+        "codebook_review_id": None,
+        "codebook_review_status": None,
         "tool_call": None,
         "step": 0,
     }
+
+
+def _graph_config() -> dict:
+    slug = os.environ.get("PIPELINE_SLUG", "default").strip() or "default"
+    job = os.environ.get("SLURM_JOB_ID", "local")
+    return {"configurable": {"thread_id": f"{slug}:{job}"}, "recursion_limit": 25}
+
+
+def _require_approved_codebook(skip_review: bool) -> None:
+    if skip_review or not human_review_enabled():
+        return
+    if CODEBOOK_PROVENANCE_PATH.is_file():
+        return
+    print(
+        f"Error: {display_path(CODEBOOK_PROVENANCE_PATH)} missing. "
+        "Run --wait-codebook-review or --fetch-codebook-review, or pass --skip-codebook-review.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
 def main() -> None:
@@ -147,6 +177,31 @@ def main() -> None:
         default=str(DEFAULT_DATA_CSV),
         help="CSV with a text column: 'text_review' (preferred) or 'review_text'.",
     )
+    p.add_argument(
+        "--upload-codebook-review",
+        action="store_true",
+        help="Upload LLM codebook (v1) to Supabase for human review.",
+    )
+    p.add_argument(
+        "--wait-codebook-review",
+        action="store_true",
+        help="Poll Supabase until codebook review is approved; materialize local artifacts.",
+    )
+    p.add_argument(
+        "--fetch-codebook-review",
+        action="store_true",
+        help="One-shot fetch of approved codebook review from Supabase.",
+    )
+    p.add_argument(
+        "--resume-codebook-review",
+        action="store_true",
+        help="Resume LangGraph checkpoint after codebook review approval (interrupt mode).",
+    )
+    p.add_argument(
+        "--skip-codebook-review",
+        action="store_true",
+        help="Bypass codebook review gate (automated runs).",
+    )
     args = p.parse_args()
 
     if args.graph_only:
@@ -168,21 +223,87 @@ def main() -> None:
         "enabled" if USE_OPEN_CODES_VALIDATOR else "disabled",
     )
 
+    if args.upload_codebook_review:
+        slug = os.environ.get("PIPELINE_SLUG", "default").strip() or "default"
+        try:
+            review_id = upload_v1_for_review(slug, rq, meta=review_meta_from_env())
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            raise SystemExit(1)
+        log_step("CODEBOOK_REVIEW_UPLOADED", f"review_id={review_id}")
+        raise SystemExit(0)
+
+    if args.wait_codebook_review:
+        slug = os.environ.get("PIPELINE_SLUG", "default").strip() or "default"
+        review_id = os.environ.get("CODEBOOK_REVIEW_ID", "").strip() or None
+        try:
+            wait_for_approval(slug, review_id=review_id)
+        except (TimeoutError, RuntimeError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            raise SystemExit(1)
+        log_step("CODEBOOK_REVIEW_APPROVED", f"slug={slug!r}")
+        raise SystemExit(0)
+
+    if args.fetch_codebook_review:
+        slug = os.environ.get("PIPELINE_SLUG", "default").strip() or "default"
+        review_id = os.environ.get("CODEBOOK_REVIEW_ID", "").strip() or None
+        try:
+            fetch_and_materialize_approved(review_id=review_id, slug=slug)
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            raise SystemExit(1)
+        log_step("CODEBOOK_REVIEW_FETCHED", f"slug={slug!r}")
+        raise SystemExit(0)
+
+    if args.resume_codebook_review:
+        from langgraph.types import Command
+
+        review_id = os.environ.get("CODEBOOK_REVIEW_ID", "").strip() or None
+        resume_payload = {"review_id": review_id} if review_id else {}
+        state = _base_state(rq)
+        state["axial_mapping"] = "refine"
+        state["codebook_review_status"] = "approved"
+        with open(CODEBOOK_PATH, encoding="utf-8") as f:
+            existing_cb = json.load(f)
+        state["codebook"] = existing_cb.get("codebook", {})
+        try:
+            final_refine = app.invoke(Command(resume=resume_payload), config=_graph_config())
+        except Exception as e:
+            log_step("CODEBOOK_REVIEW_RESUME_FALLBACK", f"checkpoint resume failed: {e}")
+            final_refine = app.invoke(state, config={"recursion_limit": 25})
+        log_step(
+            "REFINE_COMPLETE",
+            "Resumed after codebook review."
+            if final_refine.get("_cluster_refinement_done")
+            else "Resume completed.",
+        )
+        raise SystemExit(0)
+
     if args.high_level_only:
         if not CLUSTERED_CODES_PATH.is_file():
             print(f"Error: {display_path(CLUSTERED_CODES_PATH)} not found. Run axial step first.")
             raise SystemExit(1)
         state = _base_state(rq)
-        state["axial_mapping"] = "done"
-        final_hl = app.invoke(state, config={"recursion_limit": 25})
+        use_interrupt = human_review_enabled() and review_mode() == "interrupt"
+        state["axial_mapping"] = "refine" if use_interrupt else "done"
+        config = _graph_config() if use_interrupt else {"recursion_limit": 25}
+        final_hl = app.invoke(state, config=config)
         codebook = final_hl.get("codebook") or {}
         log_step(
             "CODEBOOK_COMPLETE",
             f"Generated {len(codebook)} high-level labels. See {display_path(CODEBOOK_PATH)}",
         )
+        if human_review_enabled() and not use_interrupt:
+            slug = os.environ.get("PIPELINE_SLUG", "default").strip() or "default"
+            try:
+                review_id = upload_v1_for_review(slug, rq, meta=review_meta_from_env())
+                log_step("CODEBOOK_REVIEW_UPLOADED", f"review_id={review_id}")
+            except RuntimeError as e:
+                print(f"Warning: codebook review upload failed: {e}", file=sys.stderr)
         raise SystemExit(0)
 
     if args.refine_only:
+        _require_approved_codebook(args.skip_codebook_review)
         if not CODEBOOK_PATH.is_file():
             print(f"Error: {display_path(CODEBOOK_PATH)} not found. Run high-level step first.")
             raise SystemExit(1)
@@ -194,6 +315,10 @@ def main() -> None:
         with open(CODEBOOK_PATH, encoding="utf-8") as f:
             existing_cb = json.load(f)
         state["codebook"] = existing_cb.get("codebook", {})
+        if args.skip_codebook_review:
+            state["codebook_review_status"] = "skipped"
+        elif CODEBOOK_PROVENANCE_PATH.is_file():
+            state["codebook_review_status"] = "approved"
         final_refine = app.invoke(state, config={"recursion_limit": 25})
         summary = final_refine.get("_cluster_refinement_done", False)
         log_step(

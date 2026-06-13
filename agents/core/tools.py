@@ -18,7 +18,9 @@ from .hierarchy_refine import maybe_refine_hierarchy
 from .inference_config import llm_model_name, openai_base
 from .paths import (
     CLUSTERED_CODES_PATH,
+    CODEBOOK_CONFIDENCE_PATH,
     CODEBOOK_PATH,
+    CODEBOOK_PROVENANCE_PATH,
     GLOBAL_GRAPH_PATH,
     HIERARCHY_PATH,
     META_THEMES_PATH,
@@ -300,7 +302,28 @@ def refine_cluster_assignments(codebook_path: str, cluster_file: str) -> str:
         return f"Error embedding cluster labels for refine: {e}"
     oid_to_pos = {oid: i for i, oid in enumerate(sorted_oids)}
 
+    skip_refine: set = set()
+    if os.path.isfile(str(CODEBOOK_PROVENANCE_PATH)):
+        try:
+            with open(CODEBOOK_PROVENANCE_PATH, encoding="utf-8") as f:
+                prov = json.load(f)
+            skip_refine = set(str(x) for x in prov.get("skip_refine_cluster_ids") or [])
+        except (json.JSONDecodeError, OSError, TypeError):
+            skip_refine = set()
+    if not skip_refine and os.path.isfile(str(CODEBOOK_CONFIDENCE_PATH)):
+        try:
+            with open(CODEBOOK_CONFIDENCE_PATH, encoding="utf-8") as f:
+                conf = json.load(f)
+            for cid, entry in conf.items():
+                if isinstance(entry, dict) and entry.get("needs_more_evidence"):
+                    skip_refine.add(str(cid))
+        except (json.JSONDecodeError, OSError, TypeError):
+            pass
+
     for cid in sorted_oids:
+        if str(cid) in skip_refine:
+            log_step("REFINE_SKIP_HUMAN_FLAG", f"Cluster {cid}: needs_more_evidence or human skip")
+            continue
         codes = cluster_to_codes.get(cid, [])
         if not codes:
             continue

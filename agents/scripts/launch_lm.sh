@@ -269,8 +269,23 @@ run_stage "Axial coding" \
 run_stage "High-level code generation" \
     python -m agents.cli --high-level-only --research-question "$RESEARCH_QUESTION"
 
-run_stage "Refine cluster assignments" \
-    python -m agents.cli --refine-only --research-question "$RESEARCH_QUESTION"
+if [ "${GT_CODEBOOK_REVIEW:-0}" = "1" ]; then
+    echo "Codebook review gate enabled (GT_CODEBOOK_REVIEW=1)..."
+    export PIPELINE_SLUG="${PIPELINE_SLUG:-default}"
+    export RESEARCH_QUESTION
+    if [ "${GT_CODEBOOK_REVIEW_MODE:-manual}" != "interrupt" ]; then
+        pipeline_exec python "$AGENTS_ROOT/scripts/upload_codebook_for_review.py" || exit 1
+    fi
+    pipeline_exec python -m agents.cli --wait-codebook-review --research-question "$RESEARCH_QUESTION" || exit 1
+fi
+
+if [ "${GT_CODEBOOK_REVIEW:-0}" = "1" ] && [ "${GT_CODEBOOK_REVIEW_MODE:-manual}" = "interrupt" ]; then
+    run_stage "Refine cluster assignments (resume)" \
+        python -m agents.cli --resume-codebook-review --research-question "$RESEARCH_QUESTION"
+else
+    run_stage "Refine cluster assignments" \
+        python -m agents.cli --refine-only --research-question "$RESEARCH_QUESTION"
+fi
 
 run_stage "Hierarchy construction" \
     python -m agents.cli --hierarchy-only --research-question "$RESEARCH_QUESTION"

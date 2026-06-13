@@ -203,6 +203,18 @@ Under **`agents/outputs/`** (gitignored), especially **`agents/outputs/data/`**:
 
 Optional upload reads those paths via **`agents/scripts/upload_pipeline_to_supabase.py`**.
 
+### Codebook human review gate (optional)
+
+Set in **`agents/scripts/.env.supabase`** or the launcher environment:
+
+```bash
+GT_CODEBOOK_REVIEW=1
+GT_CODEBOOK_REVIEW_MODE=manual   # or interrupt for LangGraph checkpoint resume
+PIPELINE_SLUG=my-study-slug
+```
+
+When enabled, the pipeline **stops the LLM server after high-level code generation**, uploads `codebook_v1` to Supabase table **`codebook_reviews`**, polls until a researcher approves via the frontend, materializes the edited codebook locally, then restarts the LLM for refine. See **`agents/docs/SUPABASE_CODEBOOK_REVIEWS.md`** and **`agents/docs/CODEBOOK_REVIEW_FRONTEND.md`**.
+
 ---
 
 ## 6. Known rough edges

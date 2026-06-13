@@ -10,4 +10,6 @@
 langchain-core>=0.3
 langchain-openai>=0.3
 langgraph>=0.3
+# Optional: persistent LangGraph checkpoints for interrupt resume across process restarts.
+# langgraph-checkpoint-sqlite>=2.0
 openai>=1.0
