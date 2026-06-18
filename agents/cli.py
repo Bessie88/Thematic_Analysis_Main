@@ -62,10 +62,13 @@ def _base_state(research_question: str) -> dict:
     }
 
 
-def _graph_config() -> dict:
+def _graph_config(suffix: str | None = None) -> dict:
     slug = os.environ.get("PIPELINE_SLUG", "default").strip() or "default"
     job = os.environ.get("SLURM_JOB_ID", "local")
-    return {"configurable": {"thread_id": f"{slug}:{job}"}, "recursion_limit": 25}
+    thread_id = f"{slug}:{job}"
+    if suffix:
+        thread_id = f"{thread_id}:{suffix}"
+    return {"configurable": {"thread_id": thread_id}, "recursion_limit": 25}
 
 
 def _require_approved_codebook(skip_review: bool) -> None:
@@ -270,7 +273,7 @@ def main() -> None:
             final_refine = app.invoke(Command(resume=resume_payload), config=_graph_config())
         except Exception as e:
             log_step("CODEBOOK_REVIEW_RESUME_FALLBACK", f"checkpoint resume failed: {e}")
-            final_refine = app.invoke(state, config={"recursion_limit": 25})
+            final_refine = app.invoke(state, config=_graph_config("resume-fallback"))
         log_step(
             "REFINE_COMPLETE",
             "Resumed after codebook review."
@@ -286,8 +289,7 @@ def main() -> None:
         state = _base_state(rq)
         use_interrupt = human_review_enabled() and review_mode() == "interrupt"
         state["axial_mapping"] = "refine" if use_interrupt else "done"
-        config = _graph_config() if use_interrupt else {"recursion_limit": 25}
-        final_hl = app.invoke(state, config=config)
+        final_hl = app.invoke(state, config=_graph_config("high-level"))
         codebook = final_hl.get("codebook") or {}
         log_step(
             "CODEBOOK_COMPLETE",
@@ -319,7 +321,7 @@ def main() -> None:
             state["codebook_review_status"] = "skipped"
         elif CODEBOOK_PROVENANCE_PATH.is_file():
             state["codebook_review_status"] = "approved"
-        final_refine = app.invoke(state, config={"recursion_limit": 25})
+        final_refine = app.invoke(state, config=_graph_config("refine"))
         summary = final_refine.get("_cluster_refinement_done", False)
         log_step(
             "REFINE_COMPLETE",
@@ -333,7 +335,7 @@ def main() -> None:
             raise SystemExit(1)
         state = _base_state(rq)
         state["axial_mapping"] = "hierarchy"
-        final_hier = app.invoke(state, config={"recursion_limit": 25})
+        final_hier = app.invoke(state, config=_graph_config("hierarchy"))
         log_step("HIERARCHY_COMPLETE", final_hier.get("hierarchy", ""))
         raise SystemExit(0)
 
@@ -343,7 +345,7 @@ def main() -> None:
             raise SystemExit(1)
         state = _base_state(rq)
         state["axial_mapping"] = "meta_themes"
-        final_mt = app.invoke(state, config={"recursion_limit": 25})
+        final_mt = app.invoke(state, config=_graph_config("meta-themes"))
         log_step("META_THEMES_COMPLETE", final_mt.get("meta_themes", ""))
         raise SystemExit(0)
 
@@ -356,7 +358,7 @@ def main() -> None:
             raise SystemExit(1)
         state = _base_state(rq)
         state["axial_mapping"] = "tree"
-        final_tree = app.invoke(state, config={"recursion_limit": 25})
+        final_tree = app.invoke(state, config=_graph_config("tree"))
         log_step("TREE_COMPLETE", final_tree.get("global_graph", ""))
         raise SystemExit(0)
 
@@ -409,7 +411,7 @@ def main() -> None:
             data = json.load(f)
         state = _base_state(rq)
         state["all_codes_for_axial"] = data["all_codes"]
-        final_axial = app.invoke(state, config={"recursion_limit": 25})
+        final_axial = app.invoke(state, config=_graph_config("axial"))
         axial_mapping = final_axial.get("axial_mapping", "")
         log_step(
             "AXIAL_COMPLETE",
@@ -435,7 +437,7 @@ def main() -> None:
         idx, review = idx_review
         state = _base_state(rq)
         state["raw_text"] = review
-        final_state = app.invoke(state, config={"recursion_limit": 25})
+        final_state = app.invoke(state, config=_graph_config(f"review-{idx}"))
         return idx, final_state.get("open_codes", "")
 
     workers = int(os.environ.get("GT_OPEN_CODING_WORKERS", "8"))
@@ -478,7 +480,7 @@ def main() -> None:
 
     state = _base_state(rq)
     state["all_codes_for_axial"] = all_codes
-    final_axial = app.invoke(state, config={"recursion_limit": 25})
+    final_axial = app.invoke(state, config=_graph_config("axial"))
     axial_mapping = final_axial.get("axial_mapping", "")
     log_step(
         "AXIAL_COMPLETE", axial_mapping[:500] + "..." if len(axial_mapping) > 500 else axial_mapping
@@ -486,7 +488,7 @@ def main() -> None:
 
     state = _base_state(rq)
     state["axial_mapping"] = "refine"
-    final_refine = app.invoke(state, config={"recursion_limit": 25})
+    final_refine = app.invoke(state, config=_graph_config("refine"))
     codebook = final_refine.get("codebook") or {}
     log_step(
         "CODEBOOK_REFINE_COMPLETE",

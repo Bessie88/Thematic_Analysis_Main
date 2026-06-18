@@ -4,7 +4,7 @@
 #SBATCH --mem=60G
 #SBATCH --time=0-12:00:00
 #SBATCH --gpus=h100:1
-#SBATCH --account=def-lingjzhu
+#SBATCH --account=rrg-lingjzhu
 
 #
 # Fir (Alliance): full H100 via --gpus=h100:1; GPU RAC is rrg-lingjzhu.
@@ -42,22 +42,11 @@ export HF_DATASETS_CACHE="$HF_CACHE"
 export TRANSFORMERS_CACHE="$HF_CACHE"
 export HF_HOME="$HF_CACHE"
 
-# Override path: SECRETS_FILE=/path/to/file sbatch run.sh
-SECRETS_FILE="${SECRETS_FILE:-$AGENTS_SCRIPTS/.env.supabase}"
-if [ -f "$SECRETS_FILE" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$SECRETS_FILE"
-  set +a
-else
-  echo "Note: $SECRETS_FILE not found — set SUPABASE_* and UPLOAD_TO_SUPABASE there if you want uploads." >&2
-fi
-
-# TODO: upload should happen automatically
-# If Supabase keys are set but UPLOAD_TO_SUPABASE was omitted, default to upload (set UPLOAD_TO_SUPABASE=0 to skip).
-if [ -n "${SUPABASE_SERVICE_ROLE_KEY:-}" ] && [ -n "${SUPABASE_URL:-}" ]; then
-  export UPLOAD_TO_SUPABASE="${UPLOAD_TO_SUPABASE:-1}"
-fi
+# Host-side env (Apptainer -C does not pass these into the container; launch_sgl.sh re-sources from disk).
+# shellcheck disable=SC1091
+source "$AGENTS_SCRIPTS/load_pipeline_env.sh"
+load_pipeline_env "$AGENTS_SCRIPTS"
+print_pipeline_env_flags "Host"
 
 # Default CSV is train.csv (set in launch_sgl.sh). Override example:
 # export GT_DATA_CSV="$REPO_ROOT/data/reddit_comment_text_1000.csv"
