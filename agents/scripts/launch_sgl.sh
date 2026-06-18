@@ -46,6 +46,42 @@ RESEARCH_QUESTION="What thematic patterns emerge across these reviews?"
 
 export RESEARCH_QUESTION
 
+# LLM axial clustering: read USE_LLM_CLUSTERING from agents/core/llm_clustering.py.
+USE_LLM_CLUSTERING="$(python -c "from agents.core.llm_clustering import USE_LLM_CLUSTERING; print(1 if USE_LLM_CLUSTERING else 0)")"
+
+_use_llm_clustering() {
+    [ "${USE_LLM_CLUSTERING}" = "1" ]
+}
+
+# Total context window for SGLang. LLM clustering sends large label batches and needs
+# room for input + JSON completion (HICode uses max_completion_tokens=8192).
+if _use_llm_clustering; then
+    SGLANG_CONTEXT_LENGTH="${GT_SGLANG_CONTEXT_LENGTH:-16384}"
+else
+    SGLANG_CONTEXT_LENGTH="${GT_SGLANG_CONTEXT_LENGTH:-8192}"
+fi
+export GT_SGLANG_CONTEXT_LENGTH="$SGLANG_CONTEXT_LENGTH"
+echo "SGLang context-length=${SGLANG_CONTEXT_LENGTH} (USE_LLM_CLUSTERING=${USE_LLM_CLUSTERING})"
+
+ensure_embed_weights() {
+    EMBED_WEIGHTS_DIR="$AGENTS_ROOT/weights/Qwen3-Embedding-0.6B"
+    EMBED_HF_ID="Qwen/Qwen3-Embedding-0.6B"
+    if [ -d "$EMBED_WEIGHTS_DIR" ]; then
+        export GT_EMBED_MODEL="$EMBED_WEIGHTS_DIR"
+        return 0
+    fi
+    echo "Embed model not in weights/; downloading once to $EMBED_WEIGHTS_DIR ..."
+    if command -v huggingface-cli &>/dev/null; then
+        (cd "$AGENTS_ROOT" && huggingface-cli download "$EMBED_HF_ID" --local-dir "weights/Qwen3-Embedding-0.6B")
+    else
+        (cd "$AGENTS_ROOT" && python -c "
+from huggingface_hub import snapshot_download
+snapshot_download(repo_id='$EMBED_HF_ID', local_dir='weights/Qwen3-Embedding-0.6B', local_dir_use_symlinks=False)
+")
+    fi
+    export GT_EMBED_MODEL="$EMBED_WEIGHTS_DIR"
+}
+
 # Stop SGLang reliably so GPU VRAM is freed before axial (embedding) and other steps.
 stop_sglang_server() {
     local pid="${1:-}"
@@ -171,7 +207,7 @@ python -m sglang.launch_server \
   --host 0.0.0.0 \
   --served-model-name llm \
   --mem-fraction-static 0.90 \
-  --context-length 8000 \
+  --context-length "$SGLANG_CONTEXT_LENGTH" \
   >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 echo "Server PID: $SERVER_PID"
@@ -182,34 +218,23 @@ if ! wait_for_openai_ready "$PORT" "$SERVER_LOG" "$SERVER_PID" "SGLang (Qwen)"; 
     exit 1
 fi
 
-# --- 4. Open coding only (then kill SGLang so axial can use GPU for embed model) ---
+# --- 4. Open coding ---
 echo "Starting Open Coding (agents.cli --open-coding-only)..."
 echo "GT_DATA_CSV=$GT_DATA_CSV"
 python -m agents.cli --open-coding-only --research-question "$RESEARCH_QUESTION" --data "$GT_DATA_CSV"
 OPEN_EXIT=$?
-echo "Open coding finished with exit code $OPEN_EXIT. Killing SGLang server..."
-stop_sglang_server "$SERVER_PID"
 if [ $OPEN_EXIT -ne 0 ]; then
+    stop_sglang_server "$SERVER_PID"
     exit $OPEN_EXIT
 fi
 
-# --- 5. Resolve embed model for axial step ---
-EMBED_WEIGHTS_DIR="$AGENTS_ROOT/weights/Qwen3-Embedding-0.6B"
-EMBED_WEIGHTS_REL="$AGENTS_ROOT/weights/Qwen3-Embedding-0.6B"
-EMBED_HF_ID="Qwen/Qwen3-Embedding-0.6B"
-if [ -d "$EMBED_WEIGHTS_DIR" ]; then
-    export GT_EMBED_MODEL="$EMBED_WEIGHTS_DIR"
+if _use_llm_clustering; then
+    echo "Open coding done. Keeping SGLang up for LLM axial clustering (USE_LLM_CLUSTERING in llm_clustering.py)."
 else
-    echo "Embed model not in weights/; downloading once to $EMBED_WEIGHTS_REL ..."
-    if command -v huggingface-cli &>/dev/null; then
-        (cd "$AGENTS_ROOT" && huggingface-cli download "$EMBED_HF_ID" --local-dir "weights/Qwen3-Embedding-0.6B")
-    else
-        (cd "$AGENTS_ROOT" && python -c "
-from huggingface_hub import snapshot_download
-snapshot_download(repo_id='$EMBED_HF_ID', local_dir='weights/Qwen3-Embedding-0.6B', local_dir_use_symlinks=False)
-")
-    fi
-    export GT_EMBED_MODEL="$EMBED_WEIGHTS_DIR"
+    echo "Open coding finished. Stopping SGLang so axial can use GPU for embedding model..."
+    stop_sglang_server "$SERVER_PID"
+    # --- 5. Embed weights (embedding axial path only) ---
+    ensure_embed_weights
 fi
 
 # --- 6. Axial step ---
@@ -221,21 +246,29 @@ if [ $AXIAL_EXIT -ne 0 ]; then
     exit $AXIAL_EXIT
 fi
 
-# --- 7. Restart SGLang for high-level code generation ---
-sglang_cuda_preflight "$MODEL_PATH"
+# --- 7. SGLang for high-level (restart only if we stopped it after open coding) ---
+if _use_llm_clustering; then
+    echo "SGLang still running; proceeding to high-level / refine."
+else
+    sglang_cuda_preflight "$MODEL_PATH"
+    echo "Restarting SGLang for high-level code generation..."
+    python -m sglang.launch_server \
+      --model-path "$MODEL_PATH" \
+      --port $PORT \
+      --host 0.0.0.0 \
+      --served-model-name llm \
+      --mem-fraction-static 0.90 \
+      --context-length "$SGLANG_CONTEXT_LENGTH" \
+      >"$SERVER_LOG" 2>&1 &
+    SERVER_PID=$!
+    if ! wait_for_openai_ready "$PORT" "$SERVER_LOG" "$SERVER_PID" "SGLang (Qwen, phase 2)"; then
+        exit 1
+    fi
+fi
 
-echo "Restarting SGLang for high-level code generation..."
-python -m sglang.launch_server \
-  --model-path "$MODEL_PATH" \
-  --port $PORT \
-  --host 0.0.0.0 \
-  --served-model-name llm \
-  --mem-fraction-static 0.90 \
-  --context-length 8000 \
-  >"$SERVER_LOG" 2>&1 &
-SERVER_PID=$!
-if ! wait_for_openai_ready "$PORT" "$SERVER_LOG" "$SERVER_PID" "SGLang (Qwen, phase 2)"; then
-    exit 1
+# Refine uses embedding model on CPU for similar cluster labels
+if _use_llm_clustering; then
+    ensure_embed_weights
 fi
 
 # --- 8. High-level code generation ---

@@ -21,3 +21,9 @@ The loader at `agents/core/skills.py` loads:
 
 The pipeline maps tool/phase names to skill keys (see `agents/core/tools.py` and `agents/core/report.py`).
 
+## Skill files
+
+- `open_coding.md`, `validate_open_codes.md`
+- `high_level_code_generation.md`, `high_level_synthesis.md`, `refine_cluster_assignments.md`
+- `hierarchy_construction.md`, `hierarchy_refine.md`, `meta_theme_grouping.md`, `research_report.md`
+

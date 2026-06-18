@@ -10,11 +10,20 @@ from typing import Any, Dict, List, Set
 from .embeddings import encode_texts
 from .inference_config import sentence_transformers_model_path
 from .paths import DATA_DIR, HIERARCHY_PATH, ensure_output_dirs
+from .llm_clustering import USE_LLM_CLUSTERING, axial_llm_cluster, use_llm_clustering
+from .paths import DATA_DIR, HIERARCHY_PATH, WEIGHTS_DIR, ensure_output_dirs
 from .utils import log_step
 
 REFINE_TOP_K_OTHER_CLUSTERS = 5
 
 EMBED_DRAIN_THRESHOLD = 20
+
+
+__all__ = [
+    "USE_LLM_CLUSTERING",
+    "axial_llm_cluster",
+    "use_llm_clustering",
+]
 
 
 def refine_llm_max_codes() -> int:
@@ -213,6 +222,7 @@ def axial_embed_and_cluster(all_codes: List[str], out_dir: str = str(DATA_DIR)) 
     if n < K_MIN:
         cluster_to_codes_out = {"0": deduped_codes}
         out = {
+            "clustering_method": "embedding",
             "all_codes": deduped_codes,
             "labels": [0] * n,
             "k": 1,
@@ -276,6 +286,7 @@ def axial_embed_and_cluster(all_codes: List[str], out_dir: str = str(DATA_DIR)) 
             pass
 
     out = {
+        "clustering_method": "embedding",
         "all_codes": deduped_codes,
         "labels": labels.tolist(),
         "k": best_k,
