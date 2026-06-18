@@ -25,7 +25,6 @@ from .paths import (
     GLOBAL_GRAPH_PATH,
     HIERARCHY_PATH,
     META_THEMES_PATH,
-    WEIGHTS_DIR,
     display_path,
     ensure_output_dirs,
 )
@@ -109,15 +108,7 @@ def axial_coding(open_codes: str, research_question: str = "") -> str:
     out_dir = str(CLUSTERED_CODES_PATH.parent)
     if use_llm_clustering():
         return axial_llm_cluster(all_codes, research_question, cluster_llm, out_dir=out_dir)
-    model_name = os.environ.get("GT_EMBED_MODEL") or (
-        str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B")
-        if os.path.isdir(str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B"))
-        else "Qwen/Qwen3-Embedding-0.6B"
-    )
-    if os.path.isdir(model_name):
-        model_name = os.path.abspath(model_name)
-        os.environ["HF_HUB_OFFLINE"] = "1"
-    return axial_embed_and_cluster(all_codes, model_name=model_name, out_dir=out_dir)
+    return axial_embed_and_cluster(all_codes, out_dir=out_dir)
 
 
 @tool
