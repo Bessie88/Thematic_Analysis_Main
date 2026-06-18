@@ -46,7 +46,27 @@ The active strategy is logged as `HIGH_LEVEL_STRATEGY` during runs.
 
 The diagram is a single-page map of how data moves through tools and artifacts (codes → clusters → hierarchy → meta-themes → global graph). Use it when onboarding to the repo or when tracing which stages feed which intermediate JSON under `agents/outputs/data/`.
 
-![GT Pipeline Diagram](artifacts/GT%20Pipeline%20Diagram.svg)
+```mermaid
+flowchart TD
+    open[OpenCoding] --> axial[AxialCluster]
+    axial --> hl[HighLevelLabels]
+    hl --> hil{GT_CODEBOOK_REVIEW?}
+    hil -->|yes| review[HumanReviewGate]
+    hil -->|no| refine[RefineClusters]
+    review --> refine
+    refine --> enrichCluster{GT_QUALITATIVE_ENRICHMENT?}
+    enrichCluster -->|yes| qCluster[ClusterQualitativeEnrich]
+    enrichCluster -->|no| hierarchy
+    qCluster --> hierarchy[Hierarchy]
+    hierarchy --> meta[MetaThemes]
+    meta --> enrichDim{GT_QUALITATIVE_ENRICHMENT?}
+    enrichDim -->|yes| qDim[DimensionQualitativeEnrich]
+    enrichDim -->|no| tree
+    qDim --> tree[GlobalGraph]
+    tree --> report[ReportAndCooccurrence]
+    report --> upload[SupabaseUpload]
+```
+
 
 ---
 
