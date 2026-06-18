@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -91,9 +90,7 @@ def _validate_cluster_codes(cluster_to_codes: Dict[str, List[str]]) -> None:
     for cid, codes in cluster_to_codes.items():
         for c in codes:
             if c in seen:
-                raise CodebookReviewError(
-                    f"code {c!r} appears in clusters {seen[c]!r} and {cid!r}"
-                )
+                raise CodebookReviewError(f"code {c!r} appears in clusters {seen[c]!r} and {cid!r}")
             seen[c] = cid
 
 

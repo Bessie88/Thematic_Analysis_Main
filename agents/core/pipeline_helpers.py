@@ -9,9 +9,8 @@ from typing import Any, Dict, List, Set
 
 from .embeddings import encode_texts
 from .inference_config import sentence_transformers_model_path
-from .paths import DATA_DIR, HIERARCHY_PATH, ensure_output_dirs
 from .llm_clustering import USE_LLM_CLUSTERING, axial_llm_cluster, use_llm_clustering
-from .paths import DATA_DIR, HIERARCHY_PATH, WEIGHTS_DIR, ensure_output_dirs
+from .paths import DATA_DIR, HIERARCHY_PATH, ensure_output_dirs
 from .utils import log_step
 
 REFINE_TOP_K_OTHER_CLUSTERS = 5
@@ -146,7 +145,6 @@ def normalize_meta_theme_count(
 
 def deduplicate_codes(all_codes: List[str], near_dup_threshold: float = 0.95) -> tuple:
     """Exact dedup then embedding-based near-dup merge; returns (deduped list, original→canonical map)."""
-    import numpy as np
 
     norm_to_canonical: Dict[str, str] = {}
     for code in all_codes:
@@ -200,7 +198,6 @@ def deduplicate_codes(all_codes: List[str], near_dup_threshold: float = 0.95) ->
 
 def axial_embed_and_cluster(all_codes: List[str], out_dir: str = str(DATA_DIR)) -> str:
     """Embed codes, pick K via silhouette, cluster with K-means/MiniBatch; write gt_clustered_codes.json."""
-    import numpy as np
     from sklearn.cluster import KMeans, MiniBatchKMeans
     from sklearn.metrics import silhouette_score
 
@@ -214,9 +211,7 @@ def axial_embed_and_cluster(all_codes: List[str], out_dir: str = str(DATA_DIR)) 
     deduped_codes, dedup_map = deduplicate_codes(all_codes)
     log_step("DEDUP", f"Reduced {original_count} codes to {len(deduped_codes)} unique codes")
 
-    embeddings = encode_texts(
-        deduped_codes, batch_size=64, normalize=True, show_progress=True
-    )
+    embeddings = encode_texts(deduped_codes, batch_size=64, normalize=True, show_progress=True)
 
     n = len(embeddings)
     if n < K_MIN:

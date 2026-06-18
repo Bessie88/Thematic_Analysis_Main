@@ -25,6 +25,7 @@ from .paths import (
     GLOBAL_GRAPH_PATH,
     HIERARCHY_PATH,
     META_THEMES_PATH,
+    WEIGHTS_DIR,
     display_path,
     ensure_output_dirs,
 )

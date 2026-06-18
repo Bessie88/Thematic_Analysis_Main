@@ -98,4 +98,6 @@ def build_enriched_from_artifacts(
 def flat_codebook_from_enriched(enriched: EnrichedCodebook) -> Dict[str, str]:
     """Extract flat label map from enriched payload."""
     clusters = enriched.get("clusters") or {}
-    return {str(cid): str(entry.get("label") or f"Cluster {cid}") for cid, entry in clusters.items()}
+    return {
+        str(cid): str(entry.get("label") or f"Cluster {cid}") for cid, entry in clusters.items()
+    }

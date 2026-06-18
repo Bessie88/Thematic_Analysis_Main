@@ -130,7 +130,9 @@ def materialize_approved_row(row: dict) -> Path:
     )
     clustered_out = materialize_clustered_output(result, clustered)
 
-    _write_json(CODEBOOK_PATH, {"codebook": result.codebook, "cluster_to_codes": result.cluster_to_codes})
+    _write_json(
+        CODEBOOK_PATH, {"codebook": result.codebook, "cluster_to_codes": result.cluster_to_codes}
+    )
     _write_json(CODEBOOK_CONFIDENCE_PATH, result.codebook_confidence)
     _write_json(CLUSTERED_CODES_PATH, clustered_out)
     _write_json(CODEBOOK_PROVENANCE_PATH, result.provenance)

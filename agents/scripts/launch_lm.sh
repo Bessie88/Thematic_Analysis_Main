@@ -12,6 +12,11 @@ cd "$REPO_ROOT"
 export PYTHONPATH="$REPO_ROOT"
 export PYTHONUNBUFFERED=1
 
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/load_pipeline_env.sh"
+load_pipeline_env "$SCRIPT_DIR"
+print_pipeline_env_flags "Container"
+
 GT_DATA_CSV="${GT_DATA_CSV:-$REPO_ROOT/data/train.csv}"
 SERVER_LOG="${LM_SERVER_LOG:-$AGENTS_ROOT/lm_server.log}"
 PORT="${LM_PORT:-1234}"
@@ -277,6 +282,8 @@ if [ "${GT_CODEBOOK_REVIEW:-0}" = "1" ]; then
         pipeline_exec python "$AGENTS_ROOT/scripts/upload_codebook_for_review.py" || exit 1
     fi
     pipeline_exec python -m agents.cli --wait-codebook-review --research-question "$RESEARCH_QUESTION" || exit 1
+else
+    echo "Codebook review gate skipped (GT_CODEBOOK_REVIEW=${GT_CODEBOOK_REVIEW:-0}). Set GT_CODEBOOK_REVIEW=1 for human review."
 fi
 
 if [ "${GT_CODEBOOK_REVIEW:-0}" = "1" ] && [ "${GT_CODEBOOK_REVIEW_MODE:-manual}" = "interrupt" ]; then

@@ -1,9 +1,6 @@
 """Tests for codebook review edit application."""
 
-import json
-
 import pytest
-
 from agents.core.codebook_edits import CodebookReviewError, apply_codebook_review
 
 

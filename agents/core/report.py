@@ -26,6 +26,7 @@ _TRUNK_EDGES_NOTE = (
 )
 _TRUNK_NODES_NOTE = "\nNote: nodes truncated for length; only a prefix of themes is included.\n"
 
+
 def _default_api_base() -> str:
     report_base = os.environ.get("REPORT_OPENAI_BASE", "").strip()
     if report_base:

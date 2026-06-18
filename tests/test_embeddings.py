@@ -7,7 +7,6 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
-
 from agents.core import embeddings as emb_mod
 from agents.core.embeddings import encode_texts
 from agents.core.inference_config import embed_backend

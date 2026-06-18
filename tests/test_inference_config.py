@@ -1,7 +1,6 @@
 """Tests for agents.core.inference_config."""
 
 import pytest
-
 from agents.core.inference_config import (
     embed_backend,
     embed_model_id,

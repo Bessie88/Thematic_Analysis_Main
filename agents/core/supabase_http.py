@@ -109,9 +109,7 @@ def codebook_reviews_insert_row(supabase_url: str, api_key: str, row: dict) -> t
     )
 
 
-def codebook_reviews_fetch_pending(
-    supabase_url: str, api_key: str, slug: str
-) -> dict | None:
+def codebook_reviews_fetch_pending(supabase_url: str, api_key: str, slug: str) -> dict | None:
     status, body = postgrest_request(
         "GET",
         supabase_url,
@@ -132,9 +130,7 @@ def codebook_reviews_fetch_pending(
     return rows[0] if rows else None
 
 
-def codebook_reviews_fetch_by_id(
-    supabase_url: str, api_key: str, review_id: str
-) -> dict | None:
+def codebook_reviews_fetch_by_id(supabase_url: str, api_key: str, review_id: str) -> dict | None:
     status, body = postgrest_request(
         "GET",
         supabase_url,
