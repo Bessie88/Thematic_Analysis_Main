@@ -4,7 +4,7 @@ This document compares **what is tracked in git** with **what the Slurm / Apptai
 
 There is **no GitHub Actions (or similar) CI workflow** in this repository. The batch path is:
 
-`agents/scripts/run.sh` (Slurm) → **Apptainer** → `agents/scripts/launch_sgl.sh` → staged `python -m agents.cli` calls.
+`agents/scripts/run.sh` (Slurm) → **`launch_sgl.sh`** inside PyTorch SIF (default), or **`launch_lm.sh`** on host (`GT_LAUNCHER=lm`: LM Studio SIF + PyTorch SIF) → staged `python -m agents.cli` calls.
 
 ---
 
@@ -37,7 +37,7 @@ You can call `sbatch` from any directory if you pass the **absolute path** to `r
    - **`text_review`** (preferred), or  
    - **`review_text`**
 
-3. Open **`agents/scripts/launch_sgl.sh`** and set **`GT_DATA_CSV`** to that file. By default the script points at:
+3. Open **`agents/scripts/launch_sgl.sh`** or **`launch_lm.sh`** and set **`GT_DATA_CSV`** to that file. By default both point at:
 
    ```bash
    GT_DATA_CSV="$REPO_ROOT/data/train.csv"
@@ -53,18 +53,18 @@ You can call `sbatch` from any directory if you pass the **absolute path** to `r
 
 ### 1.3 Set the research question
 
-In **`agents/scripts/launch_sgl.sh`**, edit **`RESEARCH_QUESTION`** to match your study (keep it analytic and avoid “naming” expected themes in the question text—see comments in that file for guidance).
+In **`launch_sgl.sh`** or **`launch_lm.sh`**, edit **`RESEARCH_QUESTION`** to match your study (keep it analytic and avoid “naming” expected themes in the question text—see comments in those files for guidance).
 
 ```bash
 RESEARCH_QUESTION="Your question here?"
 export RESEARCH_QUESTION
 ```
 
-**Note:** `RESEARCH_QUESTION` and `GT_DATA_CSV` are assigned **inside `launch_sgl.sh`**. Exporting them in the shell before `sbatch` does **not** override those lines unless you change the script to use something like `${RESEARCH_QUESTION:-'default'}`.
+**Note:** `RESEARCH_QUESTION` and `GT_DATA_CSV` are assigned **inside the launcher script**. Exporting them in the shell before `sbatch` does **not** override those lines unless you change the script to use something like `${RESEARCH_QUESTION:-'default'}`.
 
 ### 1.4 Model weights and Apptainer image
 
-Under **`agents/weights/`** (not in git), you need at least:
+**SGLang path (`GT_LAUNCHER=sgl`, default)** — under **`agents/weights/`** (not in git):
 
 | Path (under `agents/weights/`) | Role |
 |--------------------------------|------|
@@ -72,7 +72,23 @@ Under **`agents/weights/`** (not in git), you need at least:
 | `Mistral-7B-Instruct-v0.3` | Research report phase (`REPORT_MODEL_PATH`). Job **fails** if missing. |
 | `Qwen3-Embedding-0.6B` | Axial embeddings (or allow **one-time** Hugging Face download inside the job; after that, axial uses offline mode). |
 
-Place the **`.sif`** Apptainer image at **`agents/pytorch-langgraph-sgl.sif`** by default, or set **`SIF_PATH`** when submitting (see below).
+**LM Studio path (`GT_LAUNCHER=lm`)** — two Apptainer images plus GGUF weights on scratch:
+
+| Artifact | Default path | Role |
+|----------|--------------|------|
+| `lmstudio-llmster-preview.sif` | `agents/lmstudio-llmster-preview.sif` | LM Studio server (`pull_lmstudio_sif.sh`) |
+| `pytorch-langgraph-sgl.sif` | `agents/pytorch-langgraph-sgl.sif` | Pipeline Python (`SIF_PATH` / `PYTORCH_SIF_PATH`) |
+| GGUF LLM | `agents/weights/lmstudio/llm/*.gguf` | `download_lm_models.sh --hf-only` |
+| GGUF embed | `agents/weights/lmstudio/embed/*.gguf` | same |
+
+| Model key (default) | Role |
+|---------------------|------|
+| `lmstudio-community/Qwen3-30B-A3B-Instruct-2507-GGUF@Q4_K_M` | Chat LLM (`--identifier llm`) |
+| `Qwen/Qwen3-Embedding-0.6B-GGUF@Q8_0` | Embeddings (`--identifier embed`) |
+
+`launch_lm.sh` imports GGUF files into **`LM_APPTAINER_HOME`** (default `/scratch/$USER/lmstudio_apptainer_home`), starts the LM Studio SIF on port **1234**, and runs pipeline stages inside the PyTorch SIF. Report generation uses the **same Qwen LLM** (no Mistral swap).
+
+Place both **`.sif`** images under **`agents/`** by default, or set **`SIF_PATH`** / **`LM_SIF_PATH`** when submitting (see below).
 
 ### 1.5 Slurm and Apptainer in `run.sh`
 
@@ -105,6 +121,7 @@ Or with overrides (examples):
 
 ```bash
 SIF_PATH=/project/shared/pytorch-langgraph-sgl.sif sbatch /absolute/path/to/repo/agents/scripts/run.sh
+GT_LAUNCHER=lm sbatch run.sh   # LM Studio unified host
 ```
 
 Monitor Slurm output (`slurm-<jobid>.out` in the submission directory, or your site’s default). Logs and artifacts also land under **`agents/outputs/`** and **`agents/server.log`** (see §5).
@@ -116,7 +133,7 @@ Monitor Slurm output (`slurm-<jobid>.out` in the submission directory, or your s
 | Item | In git? | Notes |
 |------|--------|--------|
 | Python package (`agents/`), skills (`agents/skills/`), `agents/core/paths.py`, CLI | Yes | Stages, prompts, default Python path constants. |
-| `agents/scripts/run.sh`, `launch_sgl.sh`, `launch.sh` | Yes | Slurm / Apptainer / SGLang wiring; **edit `run.sh` and `launch_sgl.sh` for your site and study.** |
+| `agents/scripts/run.sh`, `launch_sgl.sh`, `launch_lm.sh`, `launch.sh` | Yes | Slurm / Apptainer / launcher wiring; **edit `run.sh` and launcher scripts for your site and study.** |
 | `agents/requirements-pipeline.txt` | Yes | LangChain stack; `launch_sgl.sh` may `pip install --user` if imports are missing in the image. |
 | `agents/weights/` | **No** | All large model directories. |
 | `agents/*.sif` | **No** | Apptainer image. |
@@ -132,7 +149,7 @@ Monitor Slurm output (`slurm-<jobid>.out` in the submission directory, or your s
 
 ## 3. End-to-end flow (what the job does)
 
-`launch_sgl.sh`:
+### SGLang (`launch_sgl.sh`, default)
 
 1. Ensures LangChain-related deps import; if not, installs from `agents/requirements-pipeline.txt` (`pip install --user`).
 2. Starts **SGLang** with the **Qwen** path under `agents/weights/` for open coding and most LLM steps.
@@ -142,7 +159,14 @@ Monitor Slurm output (`slurm-<jobid>.out` in the submission directory, or your s
 6. Switches to **Mistral** for **research report**, then **co-occurrence** (no LLM).
 7. Optionally uploads if **`UPLOAD_TO_SUPABASE=1`** and credentials are set.
 
-`run.sh` adds Slurm, `module load apptainer`, HF cache env vars, optional secrets, **`APPTAINER_HOME`**, and **`apptainer exec … launch_sgl.sh`**.
+### LM Studio (`launch_lm.sh`, `GT_LAUNCHER=lm`)
+
+1. Imports GGUF weights into **`LM_APPTAINER_HOME`**, starts **`lmstudio-llmster-preview.sif`** (port **1234**).
+2. Loads **Qwen LLM** and **Qwen3-Embedding** simultaneously (`GT_EMBED_BACKEND=lmstudio`).
+3. Runs all pipeline stages inside **`pytorch-langgraph-sgl.sif`** without stopping the LM server (open coding → axial → … → report with same Qwen → co-occurrence).
+4. Optionally uploads if **`UPLOAD_TO_SUPABASE=1`**.
+
+`run.sh` adds Slurm, `module load apptainer`, HF cache env vars, and optional secrets. For **`GT_LAUNCHER=lm`**, it runs **`launch_lm.sh` on the host** (dual-SIF). For **`sgl`**, it **`apptainer exec`**s into the PyTorch SIF only.
 
 ---
 
@@ -165,7 +189,9 @@ Monitor Slurm output (`slurm-<jobid>.out` in the submission directory, or your s
 
 ### 4.4 Python / OpenAI-compatible server
 
-- **`agents/core/tools.py`** uses `http://localhost:8000/v1` and model name **`llm`**, matching SGLang’s **`--served-model-name`** in `launch_sgl.sh`.
+- **`agents/core/inference_config.py`** resolves **`GT_OPENAI_BASE`** (default `http://localhost:8000/v1`) and **`GT_LLM_MODEL`** (default `llm`).
+- **`agents/core/embeddings.py`** uses **`GT_EMBED_BACKEND`**: `sentence_transformers` (SGLang path) or `lmstudio` (HTTP `/v1/embeddings`).
+- Report step: **`REPORT_OPENAI_BASE`** / **`REPORT_MODEL_NAME`** override; else same **`GT_*`** defaults.
 
 ---
 
@@ -176,6 +202,18 @@ Under **`agents/outputs/`** (gitignored), especially **`agents/outputs/data/`**:
 - `gt_codes_only.json`, `gt_clustered_codes.json`, `codebook.json`, hierarchy and meta-theme JSON, `gt_global_graph.json`, `research_report.md`, `gt_cooccurrence.json`, and related logs.
 
 Optional upload reads those paths via **`agents/scripts/upload_pipeline_to_supabase.py`**.
+
+### Codebook human review gate (optional)
+
+Set in **`agents/scripts/.env.supabase`** or the launcher environment:
+
+```bash
+GT_CODEBOOK_REVIEW=1
+GT_CODEBOOK_REVIEW_MODE=manual   # or interrupt for LangGraph checkpoint resume
+PIPELINE_SLUG=my-study-slug
+```
+
+When enabled, the pipeline **stops the LLM server after high-level code generation**, uploads `codebook_v1` to Supabase table **`codebook_reviews`**, polls until a researcher approves via the frontend, materializes the edited codebook locally, then restarts the LLM for refine. See **`agents/docs/SUPABASE_CODEBOOK_REVIEWS.md`** and **`agents/docs/CODEBOOK_REVIEW_FRONTEND.md`**.
 
 ---
 

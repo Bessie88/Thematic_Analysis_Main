@@ -11,10 +11,19 @@ import pandas as pd
 
 from agents.core.app import app
 from agents.core.cooccurrence import write_cooccurrence
+from agents.core.codebook_review import (
+    human_review_enabled,
+    review_meta_from_env,
+    review_mode,
+    upload_v1_for_review,
+    wait_for_approval,
+    fetch_and_materialize_approved,
+)
 from agents.core.state import USE_OPEN_CODES_VALIDATOR
 from agents.core.paths import (
     CLUSTERED_CODES_PATH,
     CODEBOOK_PATH,
+    CODEBOOK_PROVENANCE_PATH,
     COOCCURRENCE_PATH,
     DEFAULT_DATA_CSV,
     GLOBAL_GRAPH_PATH,
@@ -46,9 +55,33 @@ def _base_state(research_question: str) -> dict:
         "hierarchy": None,
         "meta_themes": None,
         "global_graph": None,
+        "codebook_review_id": None,
+        "codebook_review_status": None,
         "tool_call": None,
         "step": 0,
     }
+
+
+def _graph_config(suffix: str | None = None) -> dict:
+    slug = os.environ.get("PIPELINE_SLUG", "default").strip() or "default"
+    job = os.environ.get("SLURM_JOB_ID", "local")
+    thread_id = f"{slug}:{job}"
+    if suffix:
+        thread_id = f"{thread_id}:{suffix}"
+    return {"configurable": {"thread_id": thread_id}, "recursion_limit": 25}
+
+
+def _require_approved_codebook(skip_review: bool) -> None:
+    if skip_review or not human_review_enabled():
+        return
+    if CODEBOOK_PROVENANCE_PATH.is_file():
+        return
+    print(
+        f"Error: {display_path(CODEBOOK_PROVENANCE_PATH)} missing. "
+        "Run --wait-codebook-review or --fetch-codebook-review, or pass --skip-codebook-review.",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
 
 
 def main() -> None:
@@ -56,7 +89,7 @@ def main() -> None:
     p.add_argument(
         "--open-coding-only",
         action="store_true",
-        help="Run only open coding; save gt_codes_only.json and exit (so SGLang can be killed before axial).",
+        help="Run only open coding; save gt_codes_only.json and exit (SGLang path stops server before axial).",
     )
     p.add_argument(
         "--axial-only",
@@ -99,7 +132,7 @@ def main() -> None:
     p.add_argument(
         "--report-only",
         action="store_true",
-        help="Generate research_report.md from gt_global_graph.json (Mistral/SGLang report server must be up).",
+        help="Generate research_report.md from gt_global_graph.json (LLM server must be up).",
     )
     p.add_argument(
         "--cooccurrence-only",
@@ -119,12 +152,12 @@ def main() -> None:
     p.add_argument(
         "--report-api-base",
         default=None,
-        help="OpenAI-compatible API base for report (default: env REPORT_OPENAI_BASE or http://localhost:8000/v1).",
+        help="OpenAI-compatible API base for report (default: REPORT_OPENAI_BASE, else GT_OPENAI_BASE, else http://localhost:8000/v1).",
     )
     p.add_argument(
         "--report-model",
         default=None,
-        help="Model name for report (default: env REPORT_MODEL_NAME or llm).",
+        help="Model name for report (default: REPORT_MODEL_NAME, else GT_LLM_MODEL, else llm).",
     )
     p.add_argument(
         "--skip-cross-cluster",
@@ -146,6 +179,31 @@ def main() -> None:
         "--data",
         default=str(DEFAULT_DATA_CSV),
         help="CSV with a text column: 'text_review' (preferred) or 'review_text'.",
+    )
+    p.add_argument(
+        "--upload-codebook-review",
+        action="store_true",
+        help="Upload LLM codebook (v1) to Supabase for human review.",
+    )
+    p.add_argument(
+        "--wait-codebook-review",
+        action="store_true",
+        help="Poll Supabase until codebook review is approved; materialize local artifacts.",
+    )
+    p.add_argument(
+        "--fetch-codebook-review",
+        action="store_true",
+        help="One-shot fetch of approved codebook review from Supabase.",
+    )
+    p.add_argument(
+        "--resume-codebook-review",
+        action="store_true",
+        help="Resume LangGraph checkpoint after codebook review approval (interrupt mode).",
+    )
+    p.add_argument(
+        "--skip-codebook-review",
+        action="store_true",
+        help="Bypass codebook review gate (automated runs).",
     )
     args = p.parse_args()
 
@@ -174,21 +232,86 @@ def main() -> None:
         "llm" if use_llm_clustering() else "embedding",
     )
 
+    if args.upload_codebook_review:
+        slug = os.environ.get("PIPELINE_SLUG", "default").strip() or "default"
+        try:
+            review_id = upload_v1_for_review(slug, rq, meta=review_meta_from_env())
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            raise SystemExit(1)
+        log_step("CODEBOOK_REVIEW_UPLOADED", f"review_id={review_id}")
+        raise SystemExit(0)
+
+    if args.wait_codebook_review:
+        slug = os.environ.get("PIPELINE_SLUG", "default").strip() or "default"
+        review_id = os.environ.get("CODEBOOK_REVIEW_ID", "").strip() or None
+        try:
+            wait_for_approval(slug, review_id=review_id)
+        except (TimeoutError, RuntimeError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            raise SystemExit(1)
+        log_step("CODEBOOK_REVIEW_APPROVED", f"slug={slug!r}")
+        raise SystemExit(0)
+
+    if args.fetch_codebook_review:
+        slug = os.environ.get("PIPELINE_SLUG", "default").strip() or "default"
+        review_id = os.environ.get("CODEBOOK_REVIEW_ID", "").strip() or None
+        try:
+            fetch_and_materialize_approved(review_id=review_id, slug=slug)
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            raise SystemExit(1)
+        log_step("CODEBOOK_REVIEW_FETCHED", f"slug={slug!r}")
+        raise SystemExit(0)
+
+    if args.resume_codebook_review:
+        from langgraph.types import Command
+
+        review_id = os.environ.get("CODEBOOK_REVIEW_ID", "").strip() or None
+        resume_payload = {"review_id": review_id} if review_id else {}
+        state = _base_state(rq)
+        state["axial_mapping"] = "refine"
+        state["codebook_review_status"] = "approved"
+        with open(CODEBOOK_PATH, encoding="utf-8") as f:
+            existing_cb = json.load(f)
+        state["codebook"] = existing_cb.get("codebook", {})
+        try:
+            final_refine = app.invoke(Command(resume=resume_payload), config=_graph_config())
+        except Exception as e:
+            log_step("CODEBOOK_REVIEW_RESUME_FALLBACK", f"checkpoint resume failed: {e}")
+            final_refine = app.invoke(state, config=_graph_config("resume-fallback"))
+        log_step(
+            "REFINE_COMPLETE",
+            "Resumed after codebook review."
+            if final_refine.get("_cluster_refinement_done")
+            else "Resume completed.",
+        )
+        raise SystemExit(0)
+
     if args.high_level_only:
         if not CLUSTERED_CODES_PATH.is_file():
             print(f"Error: {display_path(CLUSTERED_CODES_PATH)} not found. Run axial step first.")
             raise SystemExit(1)
         state = _base_state(rq)
-        state["axial_mapping"] = "done"
-        final_hl = app.invoke(state, config={"recursion_limit": 25})
+        use_interrupt = human_review_enabled() and review_mode() == "interrupt"
+        state["axial_mapping"] = "refine" if use_interrupt else "done"
+        final_hl = app.invoke(state, config=_graph_config("high-level"))
         codebook = final_hl.get("codebook") or {}
         log_step(
             "CODEBOOK_COMPLETE",
             f"Generated {len(codebook)} high-level labels. See {display_path(CODEBOOK_PATH)}",
         )
+        if human_review_enabled() and not use_interrupt:
+            slug = os.environ.get("PIPELINE_SLUG", "default").strip() or "default"
+            try:
+                review_id = upload_v1_for_review(slug, rq, meta=review_meta_from_env())
+                log_step("CODEBOOK_REVIEW_UPLOADED", f"review_id={review_id}")
+            except RuntimeError as e:
+                print(f"Warning: codebook review upload failed: {e}", file=sys.stderr)
         raise SystemExit(0)
 
     if args.refine_only:
+        _require_approved_codebook(args.skip_codebook_review)
         if not CODEBOOK_PATH.is_file():
             print(f"Error: {display_path(CODEBOOK_PATH)} not found. Run high-level step first.")
             raise SystemExit(1)
@@ -200,7 +323,11 @@ def main() -> None:
         with open(CODEBOOK_PATH, encoding="utf-8") as f:
             existing_cb = json.load(f)
         state["codebook"] = existing_cb.get("codebook", {})
-        final_refine = app.invoke(state, config={"recursion_limit": 25})
+        if args.skip_codebook_review:
+            state["codebook_review_status"] = "skipped"
+        elif CODEBOOK_PROVENANCE_PATH.is_file():
+            state["codebook_review_status"] = "approved"
+        final_refine = app.invoke(state, config=_graph_config("refine"))
         summary = final_refine.get("_cluster_refinement_done", False)
         log_step(
             "REFINE_COMPLETE",
@@ -214,7 +341,7 @@ def main() -> None:
             raise SystemExit(1)
         state = _base_state(rq)
         state["axial_mapping"] = "hierarchy"
-        final_hier = app.invoke(state, config={"recursion_limit": 25})
+        final_hier = app.invoke(state, config=_graph_config("hierarchy"))
         log_step("HIERARCHY_COMPLETE", final_hier.get("hierarchy", ""))
         raise SystemExit(0)
 
@@ -224,7 +351,7 @@ def main() -> None:
             raise SystemExit(1)
         state = _base_state(rq)
         state["axial_mapping"] = "meta_themes"
-        final_mt = app.invoke(state, config={"recursion_limit": 25})
+        final_mt = app.invoke(state, config=_graph_config("meta-themes"))
         log_step("META_THEMES_COMPLETE", final_mt.get("meta_themes", ""))
         raise SystemExit(0)
 
@@ -237,7 +364,7 @@ def main() -> None:
             raise SystemExit(1)
         state = _base_state(rq)
         state["axial_mapping"] = "tree"
-        final_tree = app.invoke(state, config={"recursion_limit": 25})
+        final_tree = app.invoke(state, config=_graph_config("tree"))
         log_step("TREE_COMPLETE", final_tree.get("global_graph", ""))
         raise SystemExit(0)
 
@@ -290,7 +417,7 @@ def main() -> None:
             data = json.load(f)
         state = _base_state(rq)
         state["all_codes_for_axial"] = data["all_codes"]
-        final_axial = app.invoke(state, config={"recursion_limit": 25})
+        final_axial = app.invoke(state, config=_graph_config("axial"))
         axial_mapping = final_axial.get("axial_mapping", "")
         log_step(
             "AXIAL_COMPLETE",
@@ -316,7 +443,7 @@ def main() -> None:
         idx, review = idx_review
         state = _base_state(rq)
         state["raw_text"] = review
-        final_state = app.invoke(state, config={"recursion_limit": 25})
+        final_state = app.invoke(state, config=_graph_config(f"review-{idx}"))
         return idx, final_state.get("open_codes", "")
 
     workers = int(os.environ.get("GT_OPEN_CODING_WORKERS", "8"))
@@ -359,7 +486,7 @@ def main() -> None:
 
     state = _base_state(rq)
     state["all_codes_for_axial"] = all_codes
-    final_axial = app.invoke(state, config={"recursion_limit": 25})
+    final_axial = app.invoke(state, config=_graph_config("axial"))
     axial_mapping = final_axial.get("axial_mapping", "")
     log_step(
         "AXIAL_COMPLETE", axial_mapping[:500] + "..." if len(axial_mapping) > 500 else axial_mapping
@@ -367,7 +494,7 @@ def main() -> None:
 
     state = _base_state(rq)
     state["axial_mapping"] = "refine"
-    final_refine = app.invoke(state, config={"recursion_limit": 25})
+    final_refine = app.invoke(state, config=_graph_config("refine"))
     codebook = final_refine.get("codebook") or {}
     log_step(
         "CODEBOOK_REFINE_COMPLETE",

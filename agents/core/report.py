@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Tuple
 
 from langchain_openai import ChatOpenAI
 
+from .inference_config import llm_model_name, openai_base
 from .paths import ensure_output_dirs
 from .prompts import research_report_prompt
 from .skills import llm_invoke_with_skill
@@ -25,16 +26,19 @@ _TRUNK_EDGES_NOTE = (
 )
 _TRUNK_NODES_NOTE = "\nNote: nodes truncated for length; only a prefix of themes is included.\n"
 
-_DEFAULT_API_BASE = "http://localhost:8000/v1"
-_DEFAULT_MODEL = "llm"
-
 
 def _default_api_base() -> str:
-    return os.environ.get("REPORT_OPENAI_BASE", _DEFAULT_API_BASE).rstrip("/")
+    report_base = os.environ.get("REPORT_OPENAI_BASE", "").strip()
+    if report_base:
+        return report_base.rstrip("/")
+    return openai_base().rstrip("/")
 
 
 def _default_model_name() -> str:
-    return os.environ.get("REPORT_MODEL_NAME", _DEFAULT_MODEL)
+    report_model = os.environ.get("REPORT_MODEL_NAME", "").strip()
+    if report_model:
+        return report_model
+    return llm_model_name()
 
 
 def _render_tree_node(node: Dict[str, Any], indent: int = 0) -> str:

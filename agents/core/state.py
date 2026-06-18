@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, TypedDict
 from langgraph.graph import END
 
 from . import utils as _utils
+from .codebook_review import human_review_enabled
 from .paths import CLUSTERED_CODES_PATH, CODEBOOK_PATH
 from .tools import (
     axial_coding,
@@ -60,6 +61,10 @@ class GTState(TypedDict, total=False):
     hierarchy: Optional[str]
     meta_themes: Optional[str]
     global_graph: Optional[str]
+    # Codebook human review gate
+    codebook_review_id: Optional[str]
+    codebook_review_status: Optional[str]  # pending | approved | skipped
+    _human_review_required: Optional[bool]
     # Control
     tool_call: Optional[
         Dict[str, Any]
@@ -67,6 +72,21 @@ class GTState(TypedDict, total=False):
     step: int
     _sim_threshold: float
     _skip_cross_cluster: bool
+    _last_tool: Optional[str]
+
+
+def _needs_codebook_review(state: GTState) -> bool:
+    if not human_review_enabled():
+        return False
+    if state.get("codebook_review_status") in ("approved", "skipped"):
+        return False
+    if state.get("axial_mapping") != "refine":
+        return False
+    if not state.get("codebook"):
+        return False
+    if state.get("_cluster_refinement_done"):
+        return False
+    return True
 
 
 def agent_node(state: GTState):
@@ -145,7 +165,7 @@ def agent_node(state: GTState):
             },
             "step": step,
         }
-    # --- Refine phase: high-level then refine_cluster_assignments ---
+    # --- Refine phase: high-level then codebook review then refine_cluster_assignments ---
     if state.get("axial_mapping") == "refine" and not state.get("codebook"):
         return {
             "tool_call": {
@@ -209,20 +229,21 @@ def _parse_validation_output(output: str) -> tuple:
 
 
 def router(state: GTState):
-    """Router: returns 'tool' | END | 'agent' so LangGraph knows next node. Called after agent_node."""
-    # Agent set a tool_call -> run the tool
+    """Router: returns next node after agent_node."""
     if state.get("tool_call"):
         return "tool"
+    if _needs_codebook_review(state):
+        return "codebook_review"
     # Open-coding phase: waiting for validation or done
     if state.get("open_codes") and not state.get("all_codes_for_axial"):
         validation = state.get("open_codes_validation")
         retries = state.get("_open_coding_retries", 0)
         if validation is None:
-            return "agent"  # shouldn't happen; agent would have sent to tool
+            return "agent"
         if validation == "PASS":
             return END
         if validation == "FAIL" and retries < OPEN_CODING_MAX_RETRIES:
-            return "agent"  # agent will schedule open_coding retry
+            return "agent"
         return END
     # Axial phase (long text): axial done, no validation step
     if state.get("axial_mapping") and state.get("axial_mapping") not in (
@@ -238,8 +259,6 @@ def router(state: GTState):
         if state.get("_cluster_refinement_done"):
             return END
         return "agent"
-    # Downstream: more work to do -> agent; else END
-    # axial_mapping == "done" is legacy/compat for --high-level-only (bypasses refine); normal flow uses "refine"
     if state.get("axial_mapping") == "done" and not state.get("codebook"):
         return "agent"
     if state.get("codebook"):
@@ -259,6 +278,13 @@ def router(state: GTState):
     return "agent"
 
 
+def router_after_tool(state: GTState):
+    """Router after tool_node: review gate or back to agent."""
+    if state.get("_last_tool") == "high_level_code_generation" and _needs_codebook_review(state):
+        return "codebook_review"
+    return "agent"
+
+
 def tool_node(state: GTState):
     """Tool node: runs the tool from state['tool_call'], maps output to state updates, clears tool_call."""
     call = state["tool_call"]
@@ -275,10 +301,9 @@ def tool_node(state: GTState):
 
     log_step(f"TOOL_OUTPUT ({tool_name})", clean_output)
 
-    updates = {"tool_call": None}  # always clear so router doesn't re-dispatch
+    updates: Dict[str, Any] = {"tool_call": None, "_last_tool": tool_name}
 
     if tool_name == "open_coding":
-        # Empty model output would skip validation and re-dispatch open_coding forever
         if not clean_output.strip():
             clean_output = (
                 "- Applicability: NONE\n"
@@ -296,7 +321,7 @@ def tool_node(state: GTState):
         try:
             updates["codebook"] = json.loads(clean_output)
         except json.JSONDecodeError:
-            updates["codebook"] = {}  # fallback if LLM didn't return valid JSON
+            updates["codebook"] = {}
     elif tool_name == "refine_cluster_assignments":
         updates["_cluster_refinement_done"] = True
     elif tool_name == "hierarchy_construction":

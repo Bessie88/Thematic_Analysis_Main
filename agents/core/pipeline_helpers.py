@@ -5,14 +5,13 @@ from __future__ import annotations
 import json
 import os
 from collections import defaultdict
-from typing import TYPE_CHECKING, Any, Dict, List, Set
+from typing import Any, Dict, List, Set
 
+from .embeddings import encode_texts
+from .inference_config import sentence_transformers_model_path
 from .llm_clustering import USE_LLM_CLUSTERING, axial_llm_cluster, use_llm_clustering
-from .paths import DATA_DIR, HIERARCHY_PATH, WEIGHTS_DIR, ensure_output_dirs
+from .paths import DATA_DIR, HIERARCHY_PATH, ensure_output_dirs
 from .utils import log_step
-
-if TYPE_CHECKING:
-    from sentence_transformers import SentenceTransformer
 
 REFINE_TOP_K_OTHER_CLUSTERS = 5
 
@@ -62,20 +61,13 @@ def prune_hierarchy_to_valid_clusters(
 
 
 def embed_model_name_for_hierarchy() -> str:
-    model_name = os.environ.get("GT_EMBED_MODEL") or (
-        str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B")
-        if os.path.isdir(str(WEIGHTS_DIR / "Qwen3-Embedding-0.6B"))
-        else "Qwen/Qwen3-Embedding-0.6B"
-    )
-    if os.path.isdir(model_name):
-        model_name = os.path.abspath(model_name)
-    return model_name
+    """Backward-compatible alias for SentenceTransformer model path."""
+    return sentence_transformers_model_path()
 
 
 def drain_ungrouped_to_subthemes(
     validated_sub_themes: List[Dict[str, Any]],
     validated_ungrouped: List[str],
-    embed_model: SentenceTransformer,
 ) -> List[str]:
     """Assign each ungrouped code to the nearest sub-theme by embedding cosine similarity."""
     import numpy as np
@@ -83,12 +75,8 @@ def drain_ungrouped_to_subthemes(
     if not validated_sub_themes or not validated_ungrouped:
         return validated_ungrouped
     labels = [st["name"] for st in validated_sub_themes]
-    lab_emb = embed_model.encode(labels, normalize_embeddings=True, show_progress_bar=False)
-    code_emb = embed_model.encode(
-        validated_ungrouped, normalize_embeddings=True, show_progress_bar=False
-    )
-    lab_emb = np.asarray(lab_emb, dtype=np.float32)
-    code_emb = np.asarray(code_emb, dtype=np.float32)
+    lab_emb = encode_texts(labels, normalize=True, show_progress=False)
+    code_emb = encode_texts(validated_ungrouped, normalize=True, show_progress=False)
     sims = code_emb @ lab_emb.T
     for i, code in enumerate(validated_ungrouped):
         j = int(np.argmax(sims[i]))
@@ -155,12 +143,8 @@ def normalize_meta_theme_count(
     return mt
 
 
-def deduplicate_codes(
-    all_codes: List[str], model_name: str, near_dup_threshold: float = 0.95
-) -> tuple:
+def deduplicate_codes(all_codes: List[str], near_dup_threshold: float = 0.95) -> tuple:
     """Exact dedup then embedding-based near-dup merge; returns (deduped list, original→canonical map)."""
-    import numpy as np
-    from sentence_transformers import SentenceTransformer
 
     norm_to_canonical: Dict[str, str] = {}
     for code in all_codes:
@@ -173,11 +157,7 @@ def deduplicate_codes(
         orig_map = {c: c.strip() for c in all_codes}
         return unique_codes, orig_map
 
-    model = SentenceTransformer(model_name)
-    embeddings = model.encode(
-        unique_codes, batch_size=64, show_progress_bar=False, normalize_embeddings=True
-    )
-    embeddings = np.asarray(embeddings, dtype=np.float32)
+    embeddings = encode_texts(unique_codes, batch_size=64, normalize=True, show_progress=False)
     sim_matrix = embeddings @ embeddings.T
 
     parent: Dict[int, int] = {i: i for i in range(len(unique_codes))}
@@ -216,12 +196,8 @@ def deduplicate_codes(
     return deduped, orig_map
 
 
-def axial_embed_and_cluster(
-    all_codes: List[str], model_name: str, out_dir: str = str(DATA_DIR)
-) -> str:
+def axial_embed_and_cluster(all_codes: List[str], out_dir: str = str(DATA_DIR)) -> str:
     """Embed codes, pick K via silhouette, cluster with K-means/MiniBatch; write gt_clustered_codes.json."""
-    import numpy as np
-    from sentence_transformers import SentenceTransformer
     from sklearn.cluster import KMeans, MiniBatchKMeans
     from sklearn.metrics import silhouette_score
 
@@ -232,14 +208,10 @@ def axial_embed_and_cluster(
         return "No codes to cluster."
 
     original_count = len(all_codes)
-    deduped_codes, dedup_map = deduplicate_codes(all_codes, model_name)
+    deduped_codes, dedup_map = deduplicate_codes(all_codes)
     log_step("DEDUP", f"Reduced {original_count} codes to {len(deduped_codes)} unique codes")
 
-    model = SentenceTransformer(model_name)
-    embeddings = model.encode(
-        deduped_codes, batch_size=64, show_progress_bar=True, normalize_embeddings=True
-    )
-    embeddings = np.asarray(embeddings, dtype=np.float32)
+    embeddings = encode_texts(deduped_codes, batch_size=64, normalize=True, show_progress=True)
 
     n = len(embeddings)
     if n < K_MIN:

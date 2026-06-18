@@ -8,6 +8,12 @@ export PYTHONPATH="$REPO_ROOT"
 # When stdout/stderr are redirected to server.log, Python block-buffers; logs look "empty" for a long time while the model loads.
 export PYTHONUNBUFFERED=1
 
+# Apptainer -C strips host env; load toggles + Supabase credentials from bind-mounted repo files.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/load_pipeline_env.sh"
+load_pipeline_env "$SCRIPT_DIR"
+print_pipeline_env_flags "Container"
+
 # LangChain stack: bake into the .sif when you rebuild the image, or install once into the Apptainer
 ensure_pipeline_python_deps() {
     if python -c "import langchain_core.messages; import langchain_openai" 2>/dev/null; then
@@ -275,9 +281,46 @@ if [ $HL_EXIT -ne 0 ]; then
     exit $HL_EXIT
 fi
 
-# --- 9. Refine cluster assignments ---
-echo "Starting refine cluster assignments (agents.cli --refine-only)..."
-python -m agents.cli --refine-only --research-question "$RESEARCH_QUESTION"
+# Release GPU while waiting for human codebook review (optional gate).
+stop_sglang_server "$SERVER_PID"
+SERVER_PID=""
+
+if [ "${GT_CODEBOOK_REVIEW:-0}" = "1" ]; then
+    require_supabase_credentials
+    echo "Codebook review gate enabled (GT_CODEBOOK_REVIEW=1)..."
+    export PIPELINE_SLUG="${PIPELINE_SLUG:-default}"
+    export RESEARCH_QUESTION
+    if [ "${GT_CODEBOOK_REVIEW_MODE:-manual}" != "interrupt" ]; then
+        PYTHONPATH="$REPO_ROOT" python "$AGENTS_ROOT/scripts/upload_codebook_for_review.py" || exit 1
+    fi
+    PYTHONPATH="$REPO_ROOT" python -m agents.cli --wait-codebook-review --research-question "$RESEARCH_QUESTION" || exit 1
+else
+    echo "Codebook review gate skipped (GT_CODEBOOK_REVIEW=${GT_CODEBOOK_REVIEW:-0}). Set GT_CODEBOOK_REVIEW=1 for human review."
+fi
+
+# --- 9. Refine cluster assignments (restart SGLang) ---
+sglang_cuda_preflight "$MODEL_PATH"
+echo "Restarting SGLang for refine cluster assignments..."
+python -m sglang.launch_server \
+  --model-path "$MODEL_PATH" \
+  --port $PORT \
+  --host 0.0.0.0 \
+  --served-model-name llm \
+  --mem-fraction-static 0.90 \
+  --context-length 8000 \
+  >"$SERVER_LOG" 2>&1 &
+SERVER_PID=$!
+if ! wait_for_openai_ready "$PORT" "$SERVER_LOG" "$SERVER_PID" "SGLang (Qwen, refine)"; then
+    exit 1
+fi
+
+if [ "${GT_CODEBOOK_REVIEW:-0}" = "1" ] && [ "${GT_CODEBOOK_REVIEW_MODE:-manual}" = "interrupt" ]; then
+    echo "Starting refine via LangGraph resume (GT_CODEBOOK_REVIEW_MODE=interrupt)..."
+    python -m agents.cli --resume-codebook-review --research-question "$RESEARCH_QUESTION"
+else
+    echo "Starting refine cluster assignments (agents.cli --refine-only)..."
+    python -m agents.cli --refine-only --research-question "$RESEARCH_QUESTION"
+fi
 REFINE_EXIT=$?
 echo "Refine step finished with exit code $REFINE_EXIT."
 if [ $REFINE_EXIT -ne 0 ]; then
@@ -363,6 +406,7 @@ if [ "$COOCCURRENCE_EXIT" -ne 0 ]; then
 fi
 
 if [ "${UPLOAD_TO_SUPABASE:-0}" = "1" ]; then
+    require_supabase_credentials
     echo "Uploading pipeline artifacts to Supabase (UPLOAD_TO_SUPABASE=1)..."
     export PIPELINE_SLUG="${PIPELINE_SLUG:-default}"
     if ! PYTHONPATH="$REPO_ROOT" python "$AGENTS_ROOT/scripts/upload_pipeline_to_supabase.py"; then

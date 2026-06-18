@@ -55,13 +55,19 @@ def test_build_graph_text_for_llm_legacy_truncates(tmp_path: Path):
 
 def test_default_api_base_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("REPORT_OPENAI_BASE", raising=False)
+    monkeypatch.delenv("GT_OPENAI_BASE", raising=False)
     assert "localhost" in _default_api_base()
+    monkeypatch.setenv("GT_OPENAI_BASE", "http://lmhost:7000/v1")
+    assert _default_api_base() == "http://lmhost:7000/v1"
     monkeypatch.setenv("REPORT_OPENAI_BASE", "http://custom:9000/v1/")
     assert _default_api_base() == "http://custom:9000/v1"
 
 
 def test_default_model_name_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("REPORT_MODEL_NAME", raising=False)
+    monkeypatch.delenv("GT_LLM_MODEL", raising=False)
     assert _default_model_name() == "llm"
+    monkeypatch.setenv("GT_LLM_MODEL", "qwen-chat")
+    assert _default_model_name() == "qwen-chat"
     monkeypatch.setenv("REPORT_MODEL_NAME", "mistral-7b")
     assert _default_model_name() == "mistral-7b"
