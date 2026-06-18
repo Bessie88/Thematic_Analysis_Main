@@ -36,7 +36,7 @@ print_pipeline_env_flags() {
     if [ -n "${SUPABASE_URL:-}" ] && [ -n "${SUPABASE_SERVICE_ROLE_KEY:-}" ]; then
         supabase_ok=yes
     fi
-    echo "${where} flags: GT_CODEBOOK_REVIEW=${GT_CODEBOOK_REVIEW:-0} UPLOAD_TO_SUPABASE=${UPLOAD_TO_SUPABASE:-0} PIPELINE_SLUG=${PIPELINE_SLUG:-default} SUPABASE_CREDENTIALS=${supabase_ok}"
+    echo "${where} flags: GT_CODEBOOK_REVIEW=${GT_CODEBOOK_REVIEW:-0} GT_QUALITATIVE_ENRICHMENT=${GT_QUALITATIVE_ENRICHMENT:-1} UPLOAD_TO_SUPABASE=${UPLOAD_TO_SUPABASE:-0} PIPELINE_SLUG=${PIPELINE_SLUG:-default} SUPABASE_CREDENTIALS=${supabase_ok}"
 }
 
 require_supabase_credentials() {

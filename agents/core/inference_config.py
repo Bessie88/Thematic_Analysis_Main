@@ -51,3 +51,13 @@ def embed_model_id() -> str:
     if explicit and embed_backend() == "lmstudio":
         return explicit
     return _DEFAULT_LMSTUDIO_EMBED_ID
+
+
+def qualitative_enrichment_enabled() -> bool:
+    """Whether cluster + dimension qualitative enrichment runs in the pipeline."""
+    return os.environ.get("GT_QUALITATIVE_ENRICHMENT", "1").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )

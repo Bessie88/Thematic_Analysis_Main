@@ -18,6 +18,27 @@ Python package that implements the grounded-theory pipeline: LangGraph wiring, p
 | `hierarchy_refine.py` | Caps fan-out and regroups codes inside `gt_hierarchy.json`. |
 | `report.py` | Research report generation from the global graph. |
 | `cooccurrence.py` | Builds co-occurrence stats from clustered codes + global graph. |
+| `evidence_io.py` | Parse open-coding evidence; stable code IDs; short label helpers. |
+| `qualitative_enrichment.py` | Orchestrate cluster + meta-theme qualitative enrichment stages. |
+| `codebook_enrichment.py` | LLM logic for per-cluster qualitative entries. |
+| `enrich_dimensions.py` | LLM logic for per-meta-theme qualitative entries. |
+| `codebook_schema.py` | HIL review payload schema (v1/v2) — distinct from qualitative `codebook_enriched`. |
+| `codebook_review.py` | Human-in-the-loop codebook review gate (Supabase). |
+| `llm_client.py` | Shared `make_chat_llm()` factory (`GT_OPENAI_BASE` / `GT_LLM_MODEL`). |
+
+## Qualitative enrichment vs human review
+
+Two different “enriched” artifacts — do not merge schemas:
+
+| Artifact | Key / file | Purpose |
+|----------|------------|---------|
+| HIL review payload | `codebook_v1` / `codebook_v2` in Supabase | Human edits cluster labels and membership |
+| Qualitative codebook | `codebook.json` → `codebook_enriched` | Definition, inclusion/exclusion, grounded examples |
+| Qualitative dimensions | `gt_meta_themes_enriched.json` | Same structure at meta-theme level |
+
+Controlled by **`GT_QUALITATIVE_ENRICHMENT`** in [`agents/scripts/pipeline_config.env`](../scripts/pipeline_config.env) (default `1`). Runs after refine and after meta-themes; short `codebook` labels are preserved for hierarchy/graph.
+
+CLI: `--enrich-codebook-only`, `--enrich-dimensions-only`.
 
 ## Axial clustering modes
 

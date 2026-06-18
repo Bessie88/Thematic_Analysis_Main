@@ -5,19 +5,11 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List
 
-from langchain_openai import ChatOpenAI
-
+from .llm_client import make_chat_llm
 from .skills import llm_invoke_with_skill
 from .utils import clean_and_parse_json, log_step
 
-_llm = ChatOpenAI(
-    model="llm",
-    openai_api_key="EMPTY",
-    openai_api_base="http://localhost:8000/v1",
-    temperature=0,
-    max_tokens=4096,
-    model_kwargs={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}},
-)
+_llm = make_chat_llm()
 
 REQUIRED_KEYS = {"label", "definition", "keywords", "inclusion", "exclusion"}
 BATCH_THRESHOLD = 25  # clusters above this size use hierarchical summarization

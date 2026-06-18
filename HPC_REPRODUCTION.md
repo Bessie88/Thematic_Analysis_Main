@@ -155,7 +155,7 @@ Monitor Slurm output (`slurm-<jobid>.out` in the submission directory, or your s
 2. Starts **SGLang** with the **Qwen** path under `agents/weights/` for open coding and most LLM steps.
 3. Runs **`python -m agents.cli --open-coding-only … --data "$GT_DATA_CSV"`**.
 4. Stops SGLang, runs **axial** (embed + cluster) using **`GT_EMBED_MODEL`** (local `weights/` or first-time HF download).
-5. Restarts SGLang: **high-level → refine → hierarchy → meta-themes → global graph**.
+5. Restarts SGLang: **high-level → [optional HIL review] → refine → [qualitative enrichment] → hierarchy → meta-themes → [dimension enrichment] → global graph**.
 6. Switches to **Mistral** for **research report**, then **co-occurrence** (no LLM).
 7. Optionally uploads if **`UPLOAD_TO_SUPABASE=1`** and credentials are set.
 
@@ -199,7 +199,7 @@ Monitor Slurm output (`slurm-<jobid>.out` in the submission directory, or your s
 
 Under **`agents/outputs/`** (gitignored), especially **`agents/outputs/data/`**:
 
-- `gt_codes_only.json`, `gt_clustered_codes.json`, `codebook.json`, hierarchy and meta-theme JSON, `gt_global_graph.json`, `research_report.md`, `gt_cooccurrence.json`, and related logs.
+- `gt_codes_only.json`, `gt_clustered_codes.json`, `codebook.json` (includes optional `codebook_enriched`), `gt_meta_themes_enriched.json`, hierarchy and meta-theme JSON, `gt_global_graph.json`, `research_report.md`, `gt_cooccurrence.json`, and related logs.
 
 Optional upload reads those paths via **`agents/scripts/upload_pipeline_to_supabase.py`**.
 
@@ -214,6 +214,17 @@ PIPELINE_SLUG=my-study-slug
 ```
 
 When enabled, the pipeline **stops the LLM server after high-level code generation**, uploads `codebook_v1` to Supabase table **`codebook_reviews`**, polls until a researcher approves via the frontend, materializes the edited codebook locally, then restarts the LLM for refine. See **`agents/docs/SUPABASE_CODEBOOK_REVIEWS.md`** and **`agents/docs/CODEBOOK_REVIEW_FRONTEND.md`**.
+
+### Qualitative enrichment (optional, default ON)
+
+In **`agents/scripts/pipeline_config.env`**:
+
+```bash
+GT_QUALITATIVE_ENRICHMENT=1   # set 0 to skip
+GT_ENRICH_WORKERS=4
+```
+
+When enabled, after refine the pipeline adds definition / inclusion / exclusion / examples to `codebook.json` (`codebook_enriched` field), and after meta-themes writes `gt_meta_themes_enriched.json`. Short cluster labels in `codebook` are unchanged (graph and hierarchy use them).
 
 ---
 

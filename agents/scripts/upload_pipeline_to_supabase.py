@@ -21,6 +21,7 @@ from agents.core.paths import (
     COOCCURRENCE_PATH,
     DATA_DIR,
     GLOBAL_GRAPH_PATH,
+    META_THEMES_ENRICHED_PATH,
     OPEN_CODES_MARKDOWN_PATH,
     RESEARCH_REPORT_PATH,
 )
@@ -119,6 +120,11 @@ def main() -> int:
         "open_codes_markdown": open_codes_md,
         "cooccurrence": cooccurrence,
     }
+    if META_THEMES_ENRICHED_PATH.is_file():
+        try:
+            row["meta_themes_enriched"] = _load_json(META_THEMES_ENRICHED_PATH)
+        except (json.JSONDecodeError, OSError):
+            pass
     if meta:
         row["meta"] = meta
 

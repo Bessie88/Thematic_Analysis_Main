@@ -294,11 +294,23 @@ else
         python -m agents.cli --refine-only --research-question "$RESEARCH_QUESTION"
 fi
 
+if [ "${GT_QUALITATIVE_ENRICHMENT:-1}" = "1" ]; then
+    run_stage "Cluster qualitative enrichment" \
+        python -m agents.cli --enrich-codebook-only --research-question "$RESEARCH_QUESTION"
+else
+    echo "Skipping cluster qualitative enrichment (GT_QUALITATIVE_ENRICHMENT=0)."
+fi
+
 run_stage "Hierarchy construction" \
     python -m agents.cli --hierarchy-only --research-question "$RESEARCH_QUESTION"
 
 run_stage "Meta-theme grouping" \
     python -m agents.cli --meta-themes-only --research-question "$RESEARCH_QUESTION"
+
+if [ "${GT_QUALITATIVE_ENRICHMENT:-1}" = "1" ]; then
+    run_stage "Dimension qualitative enrichment" \
+        python -m agents.cli --enrich-dimensions-only --research-question "$RESEARCH_QUESTION"
+fi
 
 run_stage "Tree assembly" \
     python -m agents.cli --global-graph-only --research-question "$RESEARCH_QUESTION"

@@ -328,6 +328,20 @@ if [ $REFINE_EXIT -ne 0 ]; then
     exit $REFINE_EXIT
 fi
 
+# --- 9b. Cluster qualitative enrichment (optional) ---
+if [ "${GT_QUALITATIVE_ENRICHMENT:-1}" = "1" ]; then
+    echo "Starting cluster qualitative enrichment (agents.cli --enrich-codebook-only)..."
+    python -m agents.cli --enrich-codebook-only --research-question "$RESEARCH_QUESTION"
+    ENRICH_CB_EXIT=$?
+    echo "Cluster enrichment finished with exit code $ENRICH_CB_EXIT."
+    if [ $ENRICH_CB_EXIT -ne 0 ]; then
+        stop_sglang_server "$SERVER_PID"
+        exit $ENRICH_CB_EXIT
+    fi
+else
+    echo "Skipping cluster qualitative enrichment (GT_QUALITATIVE_ENRICHMENT=0)."
+fi
+
 # --- 10. Hierarchy construction ---
 echo "Starting hierarchy construction (agents.cli --hierarchy-only)..."
 python -m agents.cli --hierarchy-only --research-question "$RESEARCH_QUESTION"
@@ -346,6 +360,18 @@ echo "Meta-themes step finished with exit code $META_EXIT."
 if [ $META_EXIT -ne 0 ]; then
     stop_sglang_server "$SERVER_PID"
     exit $META_EXIT
+fi
+
+# --- 11b. Meta-theme qualitative enrichment (optional) ---
+if [ "${GT_QUALITATIVE_ENRICHMENT:-1}" = "1" ]; then
+    echo "Starting dimension qualitative enrichment (agents.cli --enrich-dimensions-only)..."
+    python -m agents.cli --enrich-dimensions-only --research-question "$RESEARCH_QUESTION"
+    ENRICH_DIM_EXIT=$?
+    echo "Dimension enrichment finished with exit code $ENRICH_DIM_EXIT."
+    if [ $ENRICH_DIM_EXIT -ne 0 ]; then
+        stop_sglang_server "$SERVER_PID"
+        exit $ENRICH_DIM_EXIT
+    fi
 fi
 
 # --- 12. Tree assembly (no LLM: merges meta-themes + hierarchy into gt_global_graph.json) ---
