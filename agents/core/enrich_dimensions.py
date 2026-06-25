@@ -18,6 +18,7 @@ from typing import Any, Dict, List
 from .llm_client import make_chat_llm
 from .paths import META_THEMES_ENRICHED_PATH
 from .skills import llm_invoke_with_skill
+from .source_memory import SourceMemory, to_grounded_example
 from .utils import clean_and_parse_json, log_step
 
 REQUIRED_KEYS = {"label", "definition", "keywords", "inclusion", "exclusion"}
@@ -138,20 +139,31 @@ def _fill_examples(
     entry: Dict[str, Any],
     cluster_to_codes: Dict[str, List[str]],
     code_evidence: Dict[str, List[str]],
+    source_memory: SourceMemory | None = None,
 ) -> None:
     used_globally: set = set()
     for section in ("inclusion", "exclusion"):
         for item in entry.get(section, []):
-            examples: List[str] = []
+            examples: List[Any] = []
             for cid in item.get("code_ids", []):
                 raw_cid = _raw_cid(cid)
+                picked = False
                 for code in cluster_to_codes.get(raw_cid, []):
-                    ev = next(iter(code_evidence.get(code, [])), None)
-                    if ev and ev not in used_globally:
-                        used_globally.add(ev)
-                        examples.append(ev)
-                        break
-                if len(examples) == 3:
+                    if source_memory:
+                        snippet = source_memory.pick_snippet_for_code(code, used=used_globally)
+                        if snippet:
+                            used_globally.add(snippet.snippet_id)
+                            examples.append(to_grounded_example(snippet))
+                            picked = True
+                            break
+                    else:
+                        ev = next(iter(code_evidence.get(code, [])), None)
+                        if ev and ev not in used_globally:
+                            used_globally.add(ev)
+                            examples.append(ev)
+                            picked = True
+                            break
+                if picked and len(examples) == 3:
                     break
             item["examples"] = examples
 
@@ -162,6 +174,7 @@ def _enrich_one(
     cluster_labels: List[str],
     cluster_to_codes: Dict[str, List[str]],
     code_evidence: Dict[str, List[str]],
+    source_memory: SourceMemory | None = None,
 ) -> Dict[str, Any]:
     available_ids = ", ".join(f"CL{cid.zfill(2)}" for cid in cluster_ids)
     valid_ids = set(available_ids.replace(" ", "").split(","))
@@ -174,7 +187,7 @@ def _enrich_one(
 
     def _run_pass1(prompt: str) -> Dict[str, Any]:
         raw = llm_invoke_with_skill(
-            _llm, "dimension_criteria_induction", prompt, response_format=induction_format
+            _llm, "dimension_enrichment", prompt, response_format=induction_format
         )
         parsed = clean_and_parse_json(raw)
         if not isinstance(parsed, dict) or not REQUIRED_KEYS.issubset(parsed):
@@ -244,7 +257,7 @@ def _enrich_one(
                     f"'{name}': {dropped} criteria dropped (no valid code_ids)",
                 )
 
-            _fill_examples(parsed, cluster_to_codes, code_evidence)
+            _fill_examples(parsed, cluster_to_codes, code_evidence, source_memory)
             return parsed
 
         except Exception as exc:

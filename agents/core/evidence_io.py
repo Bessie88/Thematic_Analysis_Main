@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import re
-from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 from .paths import CODE_ID_MAP_PATH, ensure_output_dirs
+from .source_memory import parse_open_coding_snippets
 
 
 def short_label(label: str) -> str:
@@ -29,41 +28,32 @@ def parse_code_evidence(
         code_evidence: {code_label -> [quote, ...]}
         code_notes: {code_label -> [note, ...]}
     """
+    _ = csv_path
+    snippets = parse_open_coding_snippets(md_path)
+    if not snippets:
+        return {}, {}
+
+    from collections import defaultdict
+
     code_evidence: Dict[str, List[str]] = defaultdict(list)
     code_notes: Dict[str, List[str]] = defaultdict(list)
-
-    if not md_path.is_file():
-        return dict(code_evidence), dict(code_notes)
-
-    text = md_path.read_text(encoding="utf-8")
-    blocks = re.split(r"^## Review \d+\s*$", text, flags=re.MULTILINE)
-    for block in blocks:
-        if not block.strip():
-            continue
-        for m in re.finditer(
-            r"-\s*Code:\s*(.+?)\n\s+Evidence:\s*\"(.+?)\"(?:\n\s+Note:\s*(.+?))?(?=\n-|\n*$)",
-            block,
-            re.DOTALL | re.IGNORECASE,
-        ):
-            code = m.group(1).strip()
-            evidence = m.group(2).strip()
-            note = (m.group(3) or "").strip()
-            if evidence and evidence not in code_evidence[code]:
-                code_evidence[code].append(evidence)
-            if note and note not in code_notes[code]:
-                code_notes[code].append(note)
-
-    # csv_path reserved for future CSV-backed evidence; not required today.
-    _ = csv_path
+    for s in snippets:
+        if s.quote not in code_evidence[s.open_code]:
+            code_evidence[s.open_code].append(s.quote)
+        if s.note and s.note not in code_notes[s.open_code]:
+            code_notes[s.open_code].append(s.note)
     return dict(code_evidence), dict(code_notes)
 
 
 def assign_open_code_ids(cluster_to_codes: Dict[str, List[str]]) -> Dict[str, str]:
     """Assign stable OC001-style IDs to unique open codes across all clusters."""
-    all_codes: set[str] = set()
-    for codes in cluster_to_codes.values():
-        all_codes.update(codes)
-    ordered_codes = sorted(all_codes)
+    seen: set[str] = set()
+    ordered_codes: List[str] = []
+    for cid in sorted(cluster_to_codes.keys(), key=lambda x: int(x) if str(x).isdigit() else x):
+        for code in cluster_to_codes.get(cid, []):
+            if code not in seen:
+                ordered_codes.append(code)
+                seen.add(code)
     return {code: f"OC{i + 1:03d}" for i, code in enumerate(ordered_codes)}
 
 

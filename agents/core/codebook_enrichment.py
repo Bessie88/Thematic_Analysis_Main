@@ -7,6 +7,7 @@ from typing import Any, Dict, List
 
 from .llm_client import make_chat_llm
 from .skills import llm_invoke_with_skill
+from .source_memory import SourceMemory, to_grounded_example
 from .utils import clean_and_parse_json, log_step
 
 _llm = make_chat_llm()
@@ -161,6 +162,12 @@ def _quote_in_evidence(quote: str, known: List[str]) -> bool:
     )
 
 
+def _example_quote(ex: Any) -> str:
+    if isinstance(ex, dict):
+        return str(ex.get("quote", ""))
+    return str(ex)
+
+
 def _validate_entries(
     parsed: Dict[str, Any],
     valid_ids: set,
@@ -185,7 +192,8 @@ def _validate_entries(
             valid_pairs: List[tuple] = []
             for cid, ex in paired:
                 known = code_evidence.get(id_to_code.get(cid, ""), [])
-                if known and _quote_in_evidence(ex, known):
+                quote_text = _example_quote(ex)
+                if known and _quote_in_evidence(quote_text, known):
                     valid_pairs.append((cid, ex))
                 else:
                     reason = "no evidence loaded" if not known else "not in evidence"
@@ -210,6 +218,7 @@ def _enrich_one(
     code_evidence: Dict[str, List[str]] = {},
     code_notes: Dict[str, List[str]] = {},
     code_to_id: Dict[str, str] = {},
+    source_memory: SourceMemory | None = None,
 ) -> Dict[str, Any]:
     """Call LLM to enrich a single cluster; uses hierarchical summarization for large clusters."""
     try:
@@ -352,19 +361,23 @@ def _enrich_one(
                     f"Cluster '{label}': still invalid IDs after retry {bad_ids2} — dropped",
                 )
 
-        # ── Fill examples programmatically from real evidence ─────────────────
+        # ── Fill examples programmatically from source memory ─────────────────
         for section in ("inclusion", "exclusion"):
             for item in parsed.get(section, []):
-                # Take evs[0] per cited code (open coding LLM already chose the best one),
-                # deduplicate, cap at 2
-                seen: set = set()
-                examples: List[str] = []
+                seen_snippets: set = set()
+                examples: List[Any] = []
                 for cid in item.get("code_ids", []):
                     code = local_id_to_code.get(cid, "")
-                    ev = next(iter(code_evidence.get(code, [])), None)
-                    if ev and ev not in seen:
-                        seen.add(ev)
-                        examples.append(ev)
+                    if source_memory:
+                        snippet = source_memory.pick_snippet_for_code(code, used=seen_snippets)
+                        if snippet:
+                            seen_snippets.add(snippet.snippet_id)
+                            examples.append(to_grounded_example(snippet))
+                    else:
+                        ev = next(iter(code_evidence.get(code, [])), None)
+                        if ev and ev not in seen_snippets:
+                            seen_snippets.add(ev)
+                            examples.append(ev)
                     if len(examples) == 3:
                         break
                 item["examples"] = examples
@@ -385,6 +398,7 @@ def enrich_codebook(
     code_evidence: Dict[str, List[str]] = {},
     code_notes: Dict[str, List[str]] = {},
     code_to_id: Dict[str, str] = {},
+    source_memory: SourceMemory | None = None,
 ) -> Dict[str, Dict[str, Any]]:
     """Enrich all clusters in parallel; returns {cluster_id: full_entry}."""
     enriched: Dict[str, Dict[str, Any]] = {}
@@ -398,6 +412,7 @@ def enrich_codebook(
                 code_evidence,
                 code_notes,
                 code_to_id,
+                source_memory,
             ): cid
             for cid in cluster_names
         }

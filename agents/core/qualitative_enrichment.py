@@ -9,9 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from .codebook_enrichment import enrich_codebook
-from .evidence_io import (
+from agents.core.evidence_io import (
     assign_open_code_ids,
-    parse_code_evidence,
     short_label,
     write_code_id_map,
 )
@@ -22,7 +21,14 @@ from .paths import (
     META_THEMES_ENRICHED_PATH,
     META_THEMES_PATH,
     OPEN_CODES_MARKDOWN_PATH,
+    SOURCE_MEMORY_PATH,
     ensure_output_dirs,
+)
+from .source_memory import (
+    ENRICHED_SCHEMA_VERSION,
+    SourceMemory,
+    ground_enriched_entries,
+    load_or_build_source_memory,
 )
 from .utils import log_step
 
@@ -50,6 +56,7 @@ def persist_cluster_enrichment(
             cid: entry.get("label", f"Cluster {cid}") for cid, entry in enriched.items()
         }
     cb_data["codebook_enriched"] = enriched
+    cb_data["enriched_schema_version"] = ENRICHED_SCHEMA_VERSION
     return cb_data
 
 
@@ -82,10 +89,12 @@ def run_cluster_qualitative_enrichment(
 
     cluster_names = {cid: short_label(str(label)) for cid, label in codebook.items()}
     data_csv = csv_path or Path(os.environ.get("GT_DATA_CSV", str(DEFAULT_DATA_CSV)))
-    code_evidence, code_notes = parse_code_evidence(md_path, data_csv)
 
     code_to_id = assign_open_code_ids(cluster_to_codes)
     write_code_id_map(code_to_id, CODE_ID_MAP_PATH)
+
+    memory = load_or_build_source_memory(md_path, data_csv, SOURCE_MEMORY_PATH, CODE_ID_MAP_PATH)
+    code_evidence, code_notes = memory.snippets_for_code_evidence()
 
     n_workers = workers if workers is not None else int(os.environ.get("GT_ENRICH_WORKERS", "4"))
     enriched = enrich_codebook(
@@ -95,13 +104,14 @@ def run_cluster_qualitative_enrichment(
         code_evidence=code_evidence,
         code_notes=code_notes,
         code_to_id=code_to_id,
+        source_memory=memory,
     )
 
     failed = _validate_cluster_enrichment(enriched)
     if failed:
         raise RuntimeError(
             f"{len(failed)} cluster(s) failed enrichment (empty result): {failed}. "
-            "Fix the LLM server connection and rerun."
+            "Check LLM server logs and gt_agent_trace.log; rerun --enrich-codebook-only."
         )
 
     cb_data = persist_cluster_enrichment(cb_data, enriched, preserve_short_labels=True)
@@ -147,7 +157,8 @@ def run_dimension_qualitative_enrichment(
         raise ValueError("no meta_themes found in gt_meta_themes.json")
 
     data_csv = csv_path or Path(os.environ.get("GT_DATA_CSV", str(DEFAULT_DATA_CSV)))
-    code_evidence, _ = parse_code_evidence(md_path, data_csv)
+    memory = load_or_build_source_memory(md_path, data_csv, SOURCE_MEMORY_PATH, CODE_ID_MAP_PATH)
+    code_evidence, _ = memory.snippets_for_code_evidence()
 
     n_workers = workers if workers is not None else int(os.environ.get("GT_ENRICH_WORKERS", "4"))
     enriched_list: List[Dict[str, Any] | None] = [None] * len(meta_themes)
@@ -159,7 +170,15 @@ def run_dimension_qualitative_enrichment(
             cids = [str(cid) for cid in mt.get("cluster_ids", [])]
             cluster_labels = [codebook.get(cid, f"Cluster {cid}") for cid in cids]
             futures[
-                ex.submit(_enrich_one, name, cids, cluster_labels, cluster_to_codes, code_evidence)
+                ex.submit(
+                    _enrich_one,
+                    name,
+                    cids,
+                    cluster_labels,
+                    cluster_to_codes,
+                    code_evidence,
+                    memory,
+                )
             ] = idx
 
         for fut in as_completed(futures):
@@ -177,10 +196,13 @@ def run_dimension_qualitative_enrichment(
     if failed:
         raise RuntimeError(
             f"{len(failed)} meta-theme(s) failed enrichment (empty result): {failed}. "
-            "Fix the LLM server connection and rerun."
+            "Check LLM server logs and gt_agent_trace.log; rerun --enrich-dimensions-only."
         )
 
-    out = {"meta_themes_enriched": enriched_list}
+    out = {
+        "meta_themes_enriched": enriched_list,
+        "enriched_schema_version": ENRICHED_SCHEMA_VERSION,
+    }
     ensure_output_dirs()
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)
@@ -189,3 +211,52 @@ def run_dimension_qualitative_enrichment(
         "DIMENSION_ENRICH_COMPLETE", f"Wrote {out_path.name} ({len(enriched_list)} dimensions)"
     )
     return [e for e in enriched_list if e is not None]
+
+
+def run_ground_enriched_only(
+    *,
+    codebook_path: Path = CODEBOOK_PATH,
+    meta_path: Path = META_THEMES_ENRICHED_PATH,
+    md_path: Path = OPEN_CODES_MARKDOWN_PATH,
+    csv_path: Path | None = None,
+) -> None:
+    """Upgrade string examples to grounded objects without re-running enrichment LLMs."""
+    from .enrich_dimensions import _raw_cid
+
+    data_csv = csv_path or Path(os.environ.get("GT_DATA_CSV", str(DEFAULT_DATA_CSV)))
+    memory = load_or_build_source_memory(md_path, data_csv, SOURCE_MEMORY_PATH, CODE_ID_MAP_PATH)
+
+    if codebook_path.is_file():
+        with open(codebook_path, encoding="utf-8") as f:
+            cb_data = json.load(f)
+        enriched = cb_data.get("codebook_enriched", {})
+        cluster_to_codes = cb_data.get("cluster_to_codes", {})
+        for cid, entry in enriched.items():
+            if not isinstance(entry, dict):
+                continue
+            codes = cluster_to_codes.get(str(cid), [])
+            local_id_to_code = {f"LC{i + 1:03d}": c for i, c in enumerate(codes)}
+            ground_enriched_entries({str(cid): entry}, memory, local_id_to_code=local_id_to_code)
+        cb_data["enriched_schema_version"] = ENRICHED_SCHEMA_VERSION
+        with open(codebook_path, "w", encoding="utf-8") as f:
+            json.dump(cb_data, f, indent=2, ensure_ascii=False)
+        log_step("GROUND_ENRICHED", f"Grounded examples in {codebook_path.name}")
+
+    if meta_path.is_file():
+        cluster_to_codes: Dict[str, List[str]] = {}
+        if codebook_path.is_file():
+            with open(codebook_path, encoding="utf-8") as f:
+                cluster_to_codes = json.load(f).get("cluster_to_codes", {})
+        with open(meta_path, encoding="utf-8") as f:
+            mt_data = json.load(f)
+        entries = mt_data.get("meta_themes_enriched", [])
+        ground_enriched_entries(
+            entries,
+            memory,
+            cluster_to_codes=cluster_to_codes,
+            raw_cid_fn=_raw_cid,
+        )
+        mt_data["enriched_schema_version"] = ENRICHED_SCHEMA_VERSION
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(mt_data, f, indent=2, ensure_ascii=False)
+        log_step("GROUND_ENRICHED", f"Grounded examples in {meta_path.name}")

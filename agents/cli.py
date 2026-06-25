@@ -34,13 +34,16 @@ from agents.core.paths import (
     META_THEMES_PATH,
     OPEN_CODES_MARKDOWN_PATH,
     RESEARCH_REPORT_PATH,
+    SOURCE_MEMORY_PATH,
     display_path,
     ensure_output_dirs,
 )
 from agents.core.qualitative_enrichment import (
     run_cluster_qualitative_enrichment,
     run_dimension_qualitative_enrichment,
+    run_ground_enriched_only,
 )
+from agents.core.source_memory import SourceMemory
 from agents.core.report import generate_research_report
 from agents.core.utils import extract_codes, log_step
 
@@ -221,6 +224,16 @@ def main() -> None:
         action="store_true",
         help="Run meta-theme qualitative enrichment. Requires gt_meta_themes.json. LLM must be up.",
     )
+    p.add_argument(
+        "--ground-enriched-only",
+        action="store_true",
+        help="Ground string examples in codebook_enriched / meta_themes_enriched to snippet objects (no LLM).",
+    )
+    p.add_argument(
+        "--rebuild-source-memory-only",
+        action="store_true",
+        help="Rebuild gt_source_memory.json from open-codes markdown and data CSV.",
+    )
     args = p.parse_args()
 
     if args.graph_only:
@@ -394,6 +407,42 @@ def main() -> None:
         )
         raise SystemExit(0)
 
+    if args.ground_enriched_only:
+        if not OPEN_CODES_MARKDOWN_PATH.is_file():
+            print(
+                f"Error: {display_path(OPEN_CODES_MARKDOWN_PATH)} not found. Run open coding first.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        if not CODEBOOK_PATH.is_file() and not META_THEMES_ENRICHED_PATH.is_file():
+            print(
+                "Error: no enriched artifacts found (codebook.json or gt_meta_themes_enriched.json).",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        try:
+            run_ground_enriched_only(csv_path=Path(args.data))
+        except (FileNotFoundError, ValueError, RuntimeError) as e:
+            print(f"Error: {e}", file=sys.stderr)
+            raise SystemExit(1)
+        log_step("GROUND_ENRICHED_COMPLETE", "Grounded examples updated in place.")
+        raise SystemExit(0)
+
+    if args.rebuild_source_memory_only:
+        if not OPEN_CODES_MARKDOWN_PATH.is_file():
+            print(
+                f"Error: {display_path(OPEN_CODES_MARKDOWN_PATH)} not found. Run open coding first.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        mem = SourceMemory.build(OPEN_CODES_MARKDOWN_PATH, Path(args.data))
+        mem.save(SOURCE_MEMORY_PATH)
+        log_step(
+            "SOURCE_MEMORY_REBUILT",
+            f"Wrote {len(mem.snippets)} snippets to {display_path(SOURCE_MEMORY_PATH)}",
+        )
+        raise SystemExit(0)
+
     if args.hierarchy_only:
         if not CODEBOOK_PATH.is_file():
             print(f"Error: {display_path(CODEBOOK_PATH)} not found. Run high-level step first.")
@@ -537,6 +586,13 @@ def main() -> None:
     log_step(
         "CODES_EXTRACTED",
         f"Total codes: {len(all_codes)} (from {len(codes_per_review)} reviews). See {display_path(GT_CODES_ONLY_PATH)}",
+    )
+
+    mem = SourceMemory.build(OPEN_CODES_MARKDOWN_PATH, Path(args.data))
+    mem.save(SOURCE_MEMORY_PATH)
+    log_step(
+        "SOURCE_MEMORY_BUILT",
+        f"Indexed {len(mem.snippets)} snippets. See {display_path(SOURCE_MEMORY_PATH)}",
     )
 
     if args.open_coding_only:

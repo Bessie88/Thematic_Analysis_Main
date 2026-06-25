@@ -30,6 +30,7 @@ def test_persist_cluster_enrichment_preserves_short_labels():
     assert out["codebook"]["0"] == "emotional strain"
     assert out["codebook"]["1"] == "academic pressure"
     assert out["codebook_enriched"]["0"]["definition"] == "Feelings of depletion."
+    assert out["enriched_schema_version"] == 1
     assert "codebook_enriched" in out
 
 
