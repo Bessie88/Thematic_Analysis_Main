@@ -8,12 +8,13 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List
 
-from .codebook_enrichment import enrich_codebook
 from agents.core.evidence_io import (
     assign_open_code_ids,
     short_label,
     write_code_id_map,
 )
+
+from .codebook_enrichment import enrich_codebook
 from .paths import (
     CODE_ID_MAP_PATH,
     CODEBOOK_PATH,
@@ -26,7 +27,6 @@ from .paths import (
 )
 from .source_memory import (
     ENRICHED_SCHEMA_VERSION,
-    SourceMemory,
     ground_enriched_entries,
     load_or_build_source_memory,
 )

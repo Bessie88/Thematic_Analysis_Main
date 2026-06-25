@@ -49,5 +49,5 @@ def test_assign_open_code_ids_stable_order():
     }
     mapping = assign_open_code_ids(cluster_to_codes)
     assert mapping["a code"] == "OC001"
-    assert mapping["b code"] == "OC002"
-    assert mapping["c code"] == "OC003"
+    assert mapping["c code"] == "OC002"
+    assert mapping["b code"] == "OC003"

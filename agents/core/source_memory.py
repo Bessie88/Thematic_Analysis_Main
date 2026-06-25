@@ -7,7 +7,7 @@ import re
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, TypedDict
+from typing import Any, Dict, List, Set, TypedDict
 
 from .paths import CODE_ID_MAP_PATH, SOURCE_MEMORY_PATH, ensure_output_dirs
 from .utils import log_step
@@ -153,8 +153,7 @@ class SourceMemory:
             )
 
         reviews = [
-            {"review_id": rid, "source_id": source_ids.get(rid)}
-            for rid in sorted(review_ids_seen)
+            {"review_id": rid, "source_id": source_ids.get(rid)} for rid in sorted(review_ids_seen)
         ]
         mem = cls(
             version=MEMORY_VERSION,
@@ -431,7 +430,4 @@ def ground_enriched_entries(
                 if local_id_to_code:
                     ground_criterion_examples(item, memory, open_code_resolver=_resolve_lc)
                 else:
-                    ground_criterion_examples(
-                        item, memory, cluster_codes_resolver=_cluster_codes
-                    )
-
+                    ground_criterion_examples(item, memory, cluster_codes_resolver=_cluster_codes)

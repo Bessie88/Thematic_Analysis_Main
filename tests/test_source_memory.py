@@ -85,7 +85,9 @@ def test_save_load_roundtrip(tmp_path: Path):
     assert loaded.version == mem.version
     assert len(loaded.snippets) == len(mem.snippets)
     assert loaded.by_snippet_id["SNIP-0001"] == 0
-    assert "SNIP-0001" in loaded.by_quote[normalize_quote("I can't even focus on homework anymore.")]
+    assert (
+        "SNIP-0001" in loaded.by_quote[normalize_quote("I can't even focus on homework anymore.")]
+    )
 
 
 def test_ground_criterion_examples_converts_strings(tmp_path: Path):
