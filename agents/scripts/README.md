@@ -70,3 +70,14 @@ Effects when `True`:
 - High-level step copies `cluster_theme_names` from `gt_clustered_codes.json` (no per-cluster labeling LLM).
 
 Default (`False`): unchanged behavior (stop SGLang → embedding axial → restart SGLang).
+
+## Qualitative enrichment
+
+Set in [`agents/scripts/pipeline_config.env`](pipeline_config.env):
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `GT_QUALITATIVE_ENRICHMENT` | `1` | Run cluster + dimension enrichment after refine / meta-themes |
+| `GT_ENRICH_WORKERS` | `4` | Parallel LLM workers for enrichment |
+
+Stages (when enabled): `--enrich-codebook-only` after refine, `--enrich-dimensions-only` after meta-themes. Set `GT_QUALITATIVE_ENRICHMENT=0` for faster legacy runs.

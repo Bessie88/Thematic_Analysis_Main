@@ -4,7 +4,7 @@
 #SBATCH --mem=60G
 #SBATCH --time=0-12:00:00
 #SBATCH --gpus=h100:1
-#SBATCH --account=rrg-lingjzhu
+#SBATCH --account=def-lingjzhu
 
 #
 # Fir (Alliance): full H100 via --gpus=h100:1; GPU RAC is rrg-lingjzhu.

@@ -80,16 +80,18 @@ def load_skill_text(skill_key: str) -> str:
     return _strip_yaml_frontmatter(raw)
 
 
-def llm_invoke_with_skill(llm, skill_key: str, human_prompt: str, **labels: Any) -> str:
+def llm_invoke_with_skill(llm, skill_key: str, human_prompt: str, **kwargs: Any) -> str:
     """
     Invoke ChatOpenAI with skills as a SystemMessage + HumanMessage (langchain_core).
 
     When skills are disabled or the skill file is missing, invokes with a plain string only
     (no system role). That path does not use the fallback concatenation.
 
-    Token usage for the resulting AIMessage is recorded via record_llm_usage; any kwargs
-    (e.g. cluster_id, chunk_index, phase) are forwarded as labels on the recorded event.
+    Token usage for the resulting AIMessage is recorded via record_llm_usage. Remaining kwargs
+    (e.g. cluster_id, phase) are forwarded as usage labels. ``response_format`` is passed
+    through to the model when provided.
     """
+    response_format = kwargs.pop("response_format", None)
     sys_text = load_skill_text(skill_key)
     human_prompt = human_prompt if human_prompt is not None else ""
     arg = (
@@ -98,8 +100,12 @@ def llm_invoke_with_skill(llm, skill_key: str, human_prompt: str, **labels: Any)
         else [SystemMessage(content=sys_text), HumanMessage(content=human_prompt)]
     )
 
+    invoke_kwargs: dict[str, Any] = {}
+    if response_format is not None:
+        invoke_kwargs["response_format"] = response_format
+
     t0 = time.monotonic()
-    ai = llm.invoke(arg)
+    ai = llm.invoke(arg, **invoke_kwargs)
     latency_ms = (time.monotonic() - t0) * 1000.0
-    record_llm_usage(skill_key, ai, latency_ms=latency_ms, labels=labels or None)
+    record_llm_usage(skill_key, ai, latency_ms=latency_ms, labels=kwargs or None)
     return (ai.content or "").strip()
